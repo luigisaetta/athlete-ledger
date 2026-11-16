@@ -109,6 +109,14 @@ Acceptance currently uses local checks.
 
 ## Database
 
+For the complete Oracle procedure, follow [Oracle ADB setup](docs/oracle-adb-setup.md):
+provisioning, browser-based user/role setup, wallet, `.env`, Python migrations and verification.
+SQLcl is optional.
+
+Database commands and setup scripts show a terminal banner and green `[OK]` labels for completed
+steps. An unversioned schema is marked `[INFO]`. Redirected output has no banner or ANSI colors;
+set `NO_COLOR=1` to disable colors in a terminal. `db sql` always emits only SQL.
+
 Activate the Conda environment as described above. With no database variables set, SQLite uses
 `sqlite:///./data/athlete_ledger.db` relative to the current directory. Parent directories are created
 when needed. Apply the packaged Alembic migrations, then check the database:
@@ -124,7 +132,22 @@ environment variables take precedence and empty environment-file entries are ign
 different SQLite file, set `ATHLETE_LEDGER_DB_URL` to its SQLAlchemy SQLite URL. Do not set it
 together with `ATHLETE_LEDGER_DB_DSN`.
 
-For Oracle ADB, keep the unzipped wallet outside this repository. Using SQLcl, connect as `ADMIN`
+For an **existing Oracle schema**, keep the unzipped wallet outside this repository and configure
+the Oracle variables below. From the repository root, with the Conda environment active, run:
+
+```sh
+python scripts/create_tables.py
+```
+
+This creates/upgrades the six ledger tables and the Alembic revision table, then runs `db check`.
+It uses Python thin-mode mTLS and requires no SQLcl installation. Re-running it applies only
+pending migrations. It refuses the SQLite default when the Oracle DSN is missing, so an incomplete
+configuration cannot silently create a local database. The schema owner must already have
+`CREATE SESSION`, `CREATE TABLE`, `CREATE SEQUENCE`, `CREATE VIEW` and a quota on `DATA`.
+The `ATHLETE_LEDGER_READER` role must also already exist because migrations grant it SELECT;
+creating users/roles is an administrator prerequisite, not an action performed by this launcher.
+
+For a **new schema**, the optional SQL bootstrap is available: using SQLcl, connect as `ADMIN`
 through the wallet and run [sql/oracle/00_bootstrap.sql](sql/oracle/00_bootstrap.sql). The script
 prompts for owner and reader passwords with hidden input, creates `ATHLETE_LEDGER`, the
 `ATHLETE_LEDGER_READER` role, and `ATHLETE_LEDGER_RO`. It assigns the owner a 1G quota on `DATA`
