@@ -121,7 +121,6 @@ def synchronize(
             for chunk_start, chunk_end in date_chunks(start, end):
                 chunk = Counts(chunks=1)
                 with Session(engine) as session, session.begin():
-                    seen: set[int] = set()
                     for response in provider.responses(dataset, chunk_start, chunk_end):
                         store_response(
                             session,
@@ -132,7 +131,6 @@ def synchronize(
                             provider.sdk_version,
                             clock,
                             chunk,
-                            seen,
                         )
                     state = _state(session, dataset)
                     if state.last_synced_date is None or chunk_end > state.last_synced_date:

@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from athlete_ledger.db.models import Activity, DailyHRV, DailySleep, DailyStress, RawResponse
 from athlete_ledger.db.types import JSONValue
-from athlete_ledger.normalize.garmin_connect import activity_id, normalize, records
+from athlete_ledger.normalize.garmin_connect import normalize, records
 from athlete_ledger.sync_types import PROVIDER, ProviderError, Response
 
 NormalizedRecord = Activity | DailySleep | DailyHRV | DailyStress
@@ -76,7 +76,6 @@ def store_response(
     sdk_version: str,
     clock: Callable[[], datetime],
     counts: Counts,
-    seen_activities: set[int],
 ) -> None:
     """Persist new raw content before deriving and comparing normalized rows.
 
@@ -89,17 +88,11 @@ def store_response(
         sdk_version: Installed provider SDK version.
         clock: Aware timestamp source.
         counts: Counts local to this transaction.
-        seen_activities: Activity keys already encountered in this chunk.
 
     Raises:
         ProviderError: If payload serialization is invalid.
     """
     page = records(dataset, response.payload)
-    allowed_ids: set[int] = set()
-    if dataset == "activities":
-        page_ids = {activity_id(record) for record in page}
-        allowed_ids = page_ids - seen_activities
-        seen_activities.update(page_ids)
     try:
         digest = content_hash(response.payload)
     except (ValueError, TypeError, OverflowError):
@@ -136,9 +129,6 @@ def store_response(
     batch = normalize(dataset, response.payload, start, end)
     counts.placeholders += batch.placeholders
     for row in batch.rows:
-        identifier = row["activity_id"] if dataset == "activities" else row["calendar_date"]
-        if dataset == "activities" and identifier not in allowed_ids:
-            continue
         upsert_row(session, dataset, row, raw.id, clock, counts)
 
 

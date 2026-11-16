@@ -179,14 +179,11 @@ def normalize(dataset: str, payload: Any, start: date, end: date) -> NormalizedB
             or a local activity timestamp is malformed or carries a timezone.
     """
     batch = NormalizedBatch([])
-    seen: set[date | int] = set()
+    seen: set[date] = set()
     for record in records(dataset, payload):
         row: dict[str, Any]
         if dataset == "activities":
             key = activity_id(record)
-            if key in seen:
-                continue
-            seen.add(key)
             stamp = record.get("startTimeLocal")
             try:
                 local = datetime.fromisoformat(stamp) if isinstance(stamp, str) else None

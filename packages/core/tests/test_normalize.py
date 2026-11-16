@@ -210,7 +210,7 @@ def test_activity_mapping_preserves_local_wall_time_and_zero():
         ),
     }
     assert row["start_time_local"].tzinfo is None
-    assert len(norm("activities", payload * 2).rows) == 1
+    assert len(norm("activities", payload * 2).rows) == 2
 
 
 @pytest.mark.parametrize("identifier", [None, True, -1, "private", 12.5])
