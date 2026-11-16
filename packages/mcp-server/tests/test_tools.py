@@ -397,3 +397,51 @@ async def test_metric_rounding_and_missing_duration(reader, ledger_file, server)
         assert result.structured_content["overall"]["avg_hr_bpm"] == 100.3
         assert result.structured_content["overall"]["duration_h"] == 0.35
         assert result.structured_content["overall"]["missing"]["duration"] == 1
+
+
+@pytest.mark.anyio
+async def test_published_input_schemas_and_model_descriptions(server) -> None:
+    """Publish parameter guidance, ISO patterns and wellness enums without developer sections."""
+    async with Client(server, mode="2026-07-28") as client:
+        tools = {tool.name: tool for tool in (await client.list_tools()).tools}
+    for tool in tools.values():
+        assert tool.description and tool.description == tool.description.strip()
+        for section in ("Args:", "Returns:", "Raises:"):
+            assert section not in tool.description
+        assert all(not line.startswith(" ") for line in tool.description.splitlines())
+        properties = tool.input_schema["properties"]
+        for name, parameter in properties.items():
+            assert parameter.get("description"), (tool.name, name)
+        for name in ("start", "end"):
+            if name in properties:
+                assert properties[name]["type"] == "string"
+                assert properties[name]["pattern"] == r"^\d{4}-\d{2}-\d{2}$"
+                assert "Inclusive" in properties[name]["description"]
+    activity = tools["list_activities"].input_schema["properties"]
+    assert "ledger_status" in activity["sport"]["description"]
+    assert activity["limit"]["minimum"] == 1
+    assert activity["limit"]["maximum"] == 200
+    assert activity["limit"]["default"] == 50
+    areas = tools["daily_wellness"].input_schema["properties"]["areas"]["anyOf"]
+    assert {entry["type"] for entry in areas} == {"array", "null"}
+    assert next(entry for entry in areas if entry["type"] == "array")["items"]["enum"] == [
+        "sleep",
+        "hrv",
+        "stress",
+    ]
+    assert "92" in tools["daily_wellness"].input_schema["properties"]["start"]["description"]
+
+
+@pytest.mark.anyio
+async def test_date_schema_preserves_sanitized_date_validation(server, caplog) -> None:
+    """Reject invalid date strings without repeating their values or logging private inputs."""
+    async with Client(server, mode="2026-07-28") as client:
+        for stamp in ("SYNTHETIC-PRIVATE-DATE", "2021-02-30"):
+            result = await client.call_tool(
+                "list_activities", {"start": stamp, "end": "2021-03-01"}
+            )
+            assert result.is_error
+            text = " ".join(item.text for item in result.content)
+            assert "Dates must use YYYY-MM-DD" in text
+            assert stamp not in text
+    assert caplog.text == ""

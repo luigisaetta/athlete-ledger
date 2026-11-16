@@ -9,6 +9,7 @@ import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date
+from textwrap import dedent
 from typing import Annotated, Any, Literal
 
 import oracledb
@@ -16,12 +17,15 @@ from athlete_ledger.errors import database_error_code
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import Field, WithJsonSchema
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
 from athlete_ledger_mcp import __version__, queries
 from athlete_ledger_mcp.results import ActivityList, ActivityTotals, DailyWellness, LedgerStatus
+
+# Keep date errors in parse_range, which never echoes rejected input values.
+ISODate = Annotated[str, WithJsonSchema({"type": "string", "pattern": r"^\d{4}-\d{2}-\d{2}$"})]
 
 
 @contextmanager
@@ -65,7 +69,19 @@ def create_server(
         read_only_hint=True, idempotent_hint=True, destructive_hint=False, open_world_hint=False
     )
 
-    @server.tool(title="Ledger availability", annotations=annotations, structured_output=True)
+    @server.tool(
+        title="Ledger availability",
+        description=dedent("""\
+        Get the server's local today, downloaded intervals and gaps, sync progress,
+        first/last record dates per dataset, and stored sports with activity counts.
+        Use this before choosing dates or a sport filter for other tools. Download
+        coverage includes successfully fetched empty days; record absence does not
+        mean a missing download. Activity dates are provider-local naive calendar
+        dates. Null progress or bounds mean none are recorded. Ordering is stable.
+        """).strip(),
+        annotations=annotations,
+        structured_output=True,
+    )
     def ledger_status() -> LedgerStatus:
         """Get local today, download intervals/gaps, progress, record dates and sport counts.
 
@@ -82,12 +98,58 @@ def create_server(
         with database_errors():
             return queries.ledger_status(engine, today())
 
-    @server.tool(title="Activity summaries", annotations=annotations, structured_output=True)
+    @server.tool(
+        title="Activity summaries",
+        description=dedent("""\
+        List activities in an inclusive ISO local-date range, ordered by local start
+        time then activity ID. Choose exact sport values from ledger_status; null
+        selects every sport. Return total_matching, truncated and range-clipped
+        download coverage including missing request edges. Limit is 1–200 (default
+        50), with no offset pagination. Times are provider-local wall time without
+        a timezone; distance is km (2 decimals), duration minutes (1), average HR
+        beats/minute (1), and calories kcal. Null means unavailable; zero is valid.
+        Activity names are absent unless explicitly enabled on the server.
+        """).strip(),
+        annotations=annotations,
+        structured_output=True,
+    )
     def list_activities(
-        start: str,
-        end: str,
-        sport: str | None = None,
-        limit: Annotated[int, Field(strict=True, ge=1, le=200)] = 50,
+        start: Annotated[
+            ISODate,
+            Field(
+                description=(
+                    "Inclusive first provider-local calendar date, YYYY-MM-DD; must not exceed end."
+                )
+            ),
+        ],
+        end: Annotated[
+            ISODate,
+            Field(
+                description=(
+                    "Inclusive last provider-local date, YYYY-MM-DD; includes the entire day."
+                )
+            ),
+        ],
+        sport: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Exact sport value from ledger_status.sports; null includes all sports."
+                )
+            ),
+        ] = None,
+        limit: Annotated[
+            int,
+            Field(
+                strict=True,
+                ge=1,
+                le=200,
+                description=(
+                    "Maximum number of activity summaries, 1–200; default 50. "
+                    "total_matching and truncated indicate omitted matches; no offset pagination."
+                ),
+            ),
+        ] = 50,
     ) -> ActivityList:
         """List activities in inclusive YYYY-MM-DD local dates, ordered by start then ID.
 
@@ -116,9 +178,48 @@ def create_server(
                 engine, first, last, sport, limit, include_activity_names
             )
 
-    @server.tool(title="Activity totals", annotations=annotations, structured_output=True)
+    @server.tool(
+        title="Activity totals",
+        description=dedent("""\
+        Return grouped and overall activity totals for inclusive ISO local dates.
+        Group by ISO week (YYYY-Www with Monday date), calendar month (YYYY-MM), or
+        sport (unknown for a null type), ordered by group key. Sums skip nulls;
+        empty/all-null sums are null. Report counts missing distance, duration,
+        calories and HR separately. Weight average HR by duration only over rows
+        having both inputs; zero eligible duration gives null. Units are km
+        (2 decimals), hours (2), beats/minute (1), and kcal. Zero is valid. Include
+        range-clipped download coverage, including missing request edges.
+        """).strip(),
+        annotations=annotations,
+        structured_output=True,
+    )
     def activity_totals(
-        start: str, end: str, group_by: Literal["week", "month", "sport"]
+        start: Annotated[
+            ISODate,
+            Field(
+                description=(
+                    "Inclusive first provider-local calendar date, YYYY-MM-DD; must not exceed end."
+                )
+            ),
+        ],
+        end: Annotated[
+            ISODate,
+            Field(
+                description=(
+                    "Inclusive last provider-local date, YYYY-MM-DD; includes the entire day."
+                )
+            ),
+        ],
+        group_by: Annotated[
+            Literal["week", "month", "sport"],
+            Field(
+                description=(
+                    "Grouping: week uses ISO year/week and Monday date; month uses YYYY-MM; "
+                    "sport uses the stored type, or unknown for null. Totals use km, hours, kcal "
+                    "and duration-weighted HR in beats/minute."
+                )
+            ),
+        ],
     ) -> ActivityTotals:
         """Return grouped and overall totals for inclusive ISO local dates.
 
@@ -143,8 +244,50 @@ def create_server(
         with database_errors():
             return queries.activity_totals(engine, first, last, group_by)
 
-    @server.tool(title="Daily wellness summaries", annotations=annotations, structured_output=True)
-    def daily_wellness(start: str, end: str, areas: list[str] | None = None) -> DailyWellness:
+    @server.tool(
+        title="Daily wellness summaries",
+        description=dedent("""\
+        Return every calendar day in an inclusive ISO range of at most 92 days,
+        including days with no records. Select sleep, hrv and/or stress; null means
+        all and [] means none. Each area's state is not_downloaded (outside download
+        coverage), no_record (downloaded but no row), or ok (row exists; metrics may
+        be null). Sleep/stress durations are minutes (1 decimal), HR beats/minute,
+        respiration breaths/minute, and HRV milliseconds; averages have 1 decimal.
+        Stress level is 0–100. Null means unavailable; zero is valid. Dates and areas
+        have stable ordering. Return data only, without inferred analysis.
+        """).strip(),
+        annotations=annotations,
+        structured_output=True,
+    )
+    def daily_wellness(
+        start: Annotated[
+            ISODate,
+            Field(
+                description=(
+                    "Inclusive first calendar date, YYYY-MM-DD; must not exceed end. "
+                    "The inclusive range may contain at most 92 days."
+                )
+            ),
+        ],
+        end: Annotated[
+            ISODate,
+            Field(
+                description=(
+                    "Inclusive last calendar date, YYYY-MM-DD; at most 91 days after start."
+                )
+            ),
+        ],
+        areas: Annotated[
+            list[Literal["sleep", "hrv", "stress"]] | None,
+            Field(
+                description=(
+                    "Select sleep, hrv and/or stress. Null selects all; [] selects none. "
+                    "Durations are minutes, HR beats/minute, respiration breaths/minute and HRV "
+                    "milliseconds; stress level is 0–100."
+                )
+            ),
+        ] = None,
+    ) -> DailyWellness:
         """Return every day in an inclusive ISO range of at most 92 days.
 
         Each selected area has state not_downloaded (outside download coverage),
