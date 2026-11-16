@@ -14,16 +14,20 @@ from pydantic import BaseModel, Field
 class DateInterval(BaseModel):
     """Inclusive calendar boundaries with their number of calendar days."""
 
-    start: date
-    end: date
-    days: int
+    start: date = Field(description="First included calendar date, ISO YYYY-MM-DD.")
+    end: date = Field(description="Last included calendar date, ISO YYYY-MM-DD.")
+    days: int = Field(description="Number of calendar days including both boundaries.")
 
 
 class DownloadCoverage(BaseModel):
     """Downloaded intervals and missing dates, clipped to a requested range when supplied."""
 
-    intervals: list[DateInterval]
-    gaps: list[DateInterval]
+    intervals: list[DateInterval] = Field(
+        description="Downloaded inclusive calendar-date intervals, with day counts."
+    )
+    gaps: list[DateInterval] = Field(
+        description="Missing inclusive calendar-date intervals, with day counts."
+    )
 
 
 class DatasetStatus(BaseModel):
@@ -113,13 +117,21 @@ class HeartRateZoneMinutes(BaseModel):
 class ActivityData(BaseModel):
     """Activity summary with explicit units and provider-local naive start time."""
 
-    activity_id: int
-    start_time_local: datetime
-    sport: str | None
-    distance_km: float | None
-    duration_min: float | None
-    avg_hr_bpm: float | None
-    calories_kcal: float | None
+    activity_id: int = Field(description="Provider activity identifier, unitless integer.")
+    start_time_local: datetime = Field(
+        description="Activity start as ISO local wall time, without a timezone."
+    )
+    sport: str | None = Field(description="Provider sport type, unitless text; null if unknown.")
+    distance_km: float | None = Field(
+        description="Distance in kilometres, 2 decimals; null if missing."
+    )
+    duration_min: float | None = Field(
+        description="Duration in minutes, 1 decimal; null if missing."
+    )
+    avg_hr_bpm: float | None = Field(
+        description="Average heart rate in beats/minute, 1 decimal; null if missing."
+    )
+    calories_kcal: float | None = Field(description="Energy in kilocalories; null if missing.")
     moving_duration_min: float | None = Field(
         description="Moving duration in minutes, 1 decimal; null if missing."
     )
@@ -152,25 +164,37 @@ class ActivityData(BaseModel):
 class NamedActivityData(ActivityData):
     """Activity summary including its possibly sensitive name only after explicit opt-in."""
 
-    activity_name: str | None
+    activity_name: str | None = Field(
+        description="Activity name as stored, unitless text; returned only with server opt-in."
+    )
 
 
 class ActivityList(BaseModel):
     """Ordered activity page with total match count and requested-range download coverage."""
 
-    activities: list[NamedActivityData | ActivityData]
-    total_matching: int
-    truncated: bool
-    coverage: DownloadCoverage
+    activities: list[NamedActivityData | ActivityData] = Field(
+        description="Activities ordered by local start time then identifier, with metric units."
+    )
+    total_matching: int = Field(
+        description="Count of all activities matching the date and sport filters before the limit."
+    )
+    truncated: bool = Field(
+        description="True when the matching activity count exceeds the number returned."
+    )
+    coverage: DownloadCoverage = Field(
+        description="Downloaded and missing calendar-date intervals within the requested range."
+    )
 
 
 class MissingValues(BaseModel):
     """Activity counts lacking each input metric before summation or HR weighting."""
 
-    distance: int
-    duration: int
-    calories: int
-    avg_hr: int
+    distance: int = Field(description="Count of activities missing distance in metres.")
+    duration: int = Field(description="Count of activities missing duration in seconds.")
+    calories: int = Field(description="Count of activities missing energy in kilocalories.")
+    avg_hr: int = Field(
+        description="Count of activities missing average heart rate in beats/minute."
+    )
     training_load: int = Field(
         description="Count of activities missing provider training-load units."
     )
@@ -207,11 +231,22 @@ class HeartRateZoneHours(BaseModel):
 class ActivityAggregate(BaseModel):
     """Totals excluding null inputs and duration-weighted HR over eligible activities."""
 
-    activity_count: int
-    distance_km: float | None
-    duration_h: float | None
-    calories_kcal: float | None
-    avg_hr_bpm: float | None
+    activity_count: int = Field(description="Number of activities included in this aggregate.")
+    distance_km: float | None = Field(
+        description="Distance sum in kilometres, 2 decimals; null if all missing or empty."
+    )
+    duration_h: float | None = Field(
+        description="Duration sum in hours, 2 decimals; null if all missing or empty."
+    )
+    calories_kcal: float | None = Field(
+        description="Energy sum in kilocalories; null if all missing or empty."
+    )
+    avg_hr_bpm: float | None = Field(
+        description=(
+            "Duration-weighted heart rate in beats/minute, 1 decimal; "
+            "requires both inputs and positive total duration."
+        )
+    )
     training_load: float | None = Field(
         description="Provider training-load units sum, 1 decimal; null if all missing."
     )
@@ -230,23 +265,38 @@ class ActivityAggregate(BaseModel):
     hr_zone_h: HeartRateZoneHours = Field(
         description="Plain zone-time sums in hours, 2 decimals; always present, members nullable."
     )
-    missing: MissingValues
+    missing: MissingValues = Field(
+        description="Activity counts lacking each input metric before aggregation."
+    )
 
 
 class ActivityGroup(ActivityAggregate):
     """One stable week/month/sport group with its ISO key and optional week Monday."""
 
-    key: str
-    monday: date | None = None
+    key: str = Field(
+        description="ISO week YYYY-Www, month YYYY-MM or sport; unknown for null sport."
+    )
+    monday: date | None = Field(
+        default=None,
+        description="ISO calendar date of the week Monday; null for month or sport groups.",
+    )
 
 
 class ActivityTotals(BaseModel):
     """Grouped and overall activity aggregates with coverage for the inclusive request."""
 
-    group_by: Literal["week", "month", "sport"]
-    groups: list[ActivityGroup]
-    overall: ActivityAggregate
-    coverage: DownloadCoverage
+    group_by: Literal["week", "month", "sport"] = Field(
+        description="Grouping dimension: ISO week, calendar month or sport."
+    )
+    groups: list[ActivityGroup] = Field(
+        description="Aggregates in group-key order, with metric units and missing-input counts."
+    )
+    overall: ActivityAggregate = Field(
+        description="Overall aggregate with metric units and missing-input counts."
+    )
+    coverage: DownloadCoverage = Field(
+        description="Downloaded and missing calendar-date intervals within the requested range."
+    )
 
 
 class SleepValues(BaseModel):

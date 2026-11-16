@@ -316,8 +316,8 @@ async def test_zero_is_a_present_metric_in_every_new_sum(ledger_file, server):
 
 
 @pytest.mark.anyio
-async def test_new_schema_fields_are_required_described_and_unit_explicit(server):
-    """Publish descriptions for every new scalar/member and require stable nested object keys."""
+async def test_schema_fields_are_required_described_and_unit_explicit(server):
+    """Describe every activity output property and require stable nested object keys."""
     async with Client(server, mode="2026-07-28") as client:
         tools = {tool.name: tool for tool in (await client.list_tools()).tools}
     listing = tools["list_activities"].output_schema
@@ -337,7 +337,26 @@ async def test_new_schema_fields_are_required_described_and_unit_explicit(server
         totals["$defs"]["MissingValues"]["properties"][key].get("description")
         for key in MISSING_FIELDS
     )
+
+    def check_descriptions(node):
+        """Check descriptions throughout a published activity output schema.
+
+        Args:
+            node: Schema subtree, including references, definitions and union branches.
+        """
+        if isinstance(node, dict):
+            for field in node.get("properties", {}).values():
+                assert field.get("description")
+            if "description" in node:
+                assert not any(word in node["description"] for word in ("Existing", "Added"))
+            for child in node.values():
+                check_descriptions(child)
+        elif isinstance(node, list):
+            for child in node:
+                check_descriptions(child)
+
     for schema in (listing, totals):
+        check_descriptions(schema)
         for name in (
             "TrainingMetrics",
             "IntensityMinutes",
@@ -354,7 +373,10 @@ async def test_new_schema_fields_are_required_described_and_unit_explicit(server
                 )
     for name in ("list_activities", "activity_totals"):
         description = tools[name].description
-        assert all(section not in description for section in ("Args:", "Returns:", "Raises:"))
+        assert all(
+            section not in description
+            for section in ("Args:", "Returns:", "Raises:", "Existing", "Added")
+        )
         assert "provider" in description.lower() and "power-meter" in description
     assert "km/h" in tools["list_activities"].description
     assert "hr_zone_min" in tools["list_activities"].description
