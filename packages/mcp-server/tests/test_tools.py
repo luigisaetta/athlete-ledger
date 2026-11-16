@@ -356,6 +356,71 @@ async def test_queries_never_select_private_raw_columns_or_disabled_names(
         "payload" not in sql and "params" not in sql and "activity_name" not in sql
         for sql in statements
     )
+    for statement in statements:
+        sql = " ".join(statement.split())
+        if " FROM raw_response " in sql:
+            assert sql.split(" FROM ")[0] == (
+                "SELECT DISTINCT raw_response.range_start, raw_response.range_end"
+            )
+        if sql.startswith("SELECT activity.activity_id, "):
+            projection = sql.split(" FROM ")[0]
+            selected = {column.removeprefix("SELECT ").strip() for column in projection.split(",")}
+            assert selected == {
+                f"activity.{name}"
+                for name in (
+                    "activity_id",
+                    "start_time_local",
+                    "activity_type",
+                    "distance_m",
+                    "duration_s",
+                    "avg_hr_bpm",
+                    "calories_kcal",
+                    "moving_duration_s",
+                    "avg_speed_mps",
+                    "max_hr_bpm",
+                    "elevation_gain_m",
+                    "elevation_loss_m",
+                    "aerobic_training_effect",
+                    "anaerobic_training_effect",
+                    "training_effect_label",
+                    "training_load",
+                    "training_stress_score",
+                    "intensity_factor",
+                    "normalized_power_w",
+                    "moderate_intensity_min",
+                    "vigorous_intensity_min",
+                    "hr_zone_1_s",
+                    "hr_zone_2_s",
+                    "hr_zone_3_s",
+                    "hr_zone_4_s",
+                    "hr_zone_5_s",
+                )
+            }
+        if sql.startswith("SELECT activity.start_time_local, activity.activity_type, "):
+            projection = sql.split(" FROM ")[0]
+            selected = {column.removeprefix("SELECT ").strip() for column in projection.split(",")}
+            assert selected == {
+                f"activity.{name}"
+                for name in (
+                    "start_time_local",
+                    "activity_type",
+                    "distance_m",
+                    "duration_s",
+                    "avg_hr_bpm",
+                    "calories_kcal",
+                    "training_load",
+                    "training_stress_score",
+                    "moving_duration_s",
+                    "elevation_gain_m",
+                    "moderate_intensity_min",
+                    "vigorous_intensity_min",
+                    "hr_zone_1_s",
+                    "hr_zone_2_s",
+                    "hr_zone_3_s",
+                    "hr_zone_4_s",
+                    "hr_zone_5_s",
+                )
+            }
     assert caplog.text == ""
 
 
