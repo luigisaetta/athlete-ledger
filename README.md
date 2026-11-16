@@ -253,7 +253,9 @@ an empty terminating page, deduplicating activity IDs and rejecting pagination t
 progress. Every chunk commits raw responses, normalized rows and state together. On failure, that
 chunk is rolled back, previous chunks remain committed, and a separate transaction records
 `failed` without advancing its last committed date. Other datasets continue; any failure produces
-a nonzero exit code. Re-running an interrupted backfill is safe: completed chunks can be fetched
+a nonzero exit code. Older backfills preserve the later stored progress date, so they do not
+move the next incremental window backwards; run timestamps and status still reflect the latest
+attempt. Re-running an interrupted backfill is safe: completed chunks can be fetched
 again, and identical raw responses are skipped. `sync run` resumes from the last committed date
 with the normal overlap.
 

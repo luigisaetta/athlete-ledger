@@ -80,7 +80,10 @@ def synchronize(
     today: date | None = None,
     clock: Callable[[], datetime] = utc_now,
 ) -> list[DatasetResult]:
-    """Commit raw rows, normalized changes and state atomically per chunk.
+    """Commit each chunk atomically without moving stored progress backwards.
+
+    Historical backfills update run metadata but preserve a later committed
+    last_synced_date, keeping the next incremental overlap window unchanged.
 
     Args:
         engine: Ledger database engine with migrations already applied.
@@ -132,7 +135,8 @@ def synchronize(
                             seen,
                         )
                     state = _state(session, dataset)
-                    state.last_synced_date = chunk_end
+                    if state.last_synced_date is None or chunk_end > state.last_synced_date:
+                        state.last_synced_date = chunk_end
                     state.last_run_at = clock()
                     state.last_status = "ok"
                 result.counts.add(chunk)

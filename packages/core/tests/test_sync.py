@@ -463,3 +463,42 @@ def test_cli_invalid_dataset_does_not_echo_value(capsys):
     with pytest.raises(SystemExit):
         run(["sync", "run", "--dataset", "SYNTHETIC-PRIVATE-ARGUMENT"])
     assert "SYNTHETIC-PRIVATE-ARGUMENT" not in capsys.readouterr().err
+
+
+def test_older_backfill_preserves_progress_and_incremental_window(engine):
+    """Keep recent progress and the same incremental range after an older backfill."""
+    provider = FakeProvider()
+    recent = synchronize(
+        engine,
+        provider,
+        ["sleep"],
+        since=date(2026, 1, 20),
+        until=NOW.date(),
+        today=NOW.date(),
+        clock=lambda: NOW,
+    )
+    assert not recent[0].error
+    provider.calls.clear()
+    baseline = synchronize(engine, provider, ["sleep"], today=NOW.date(), clock=lambda: NOW)
+    assert not baseline[0].error
+    baseline_window = list(provider.calls)
+    assert baseline_window == [("sleep", date(2026, 1, 27), NOW.date())]
+
+    later_run_time = NOW + timedelta(hours=1)
+    older = backfill(engine, provider, days=14, datasets=["sleep"], clock=lambda: later_run_time)
+    assert not older[0].error and older[0].counts.chunks == 2
+    with Session(engine) as session:
+        state = session.get(SyncState, (PROVIDER, "sleep"))
+        assert state.last_synced_date == NOW.date()
+        assert state.last_status == "ok"
+        assert state.last_run_at == later_run_time
+
+    provider.calls.clear()
+    following = synchronize(
+        engine, provider, ["sleep"], today=NOW.date(), clock=lambda: later_run_time
+    )
+    assert not following[0].error
+    assert provider.calls == baseline_window
+    assert following[0].counts.inserted == following[0].counts.updated == 0
+    with Session(engine) as session:
+        assert session.get(SyncState, (PROVIDER, "sleep")).last_synced_date == NOW.date()
