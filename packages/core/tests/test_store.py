@@ -1,4 +1,9 @@
-"""SQLite storage, migrations and dialect-only DDL tests with synthetic records."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: SQLite storage, migrations and dialect-only DDL tests with synthetic records.
+"""  # noqa: D205, D212
 
 import re
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -38,6 +43,14 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def raw_response(**kwargs: object) -> RawResponse:
+    """Handle raw response.
+
+    Args:
+        **kwargs: Kwargs for this operation.
+
+    Returns:
+        The operation result.
+    """
     values = dict(
         provider="synthetic",
         endpoint="/synthetic/summary",
@@ -53,6 +66,7 @@ def raw_response(**kwargs: object) -> RawResponse:
 
 
 def test_migration_roundtrip_and_metadata_parity(tmp_path: Path) -> None:
+    """Verify migration roundtrip and metadata parity."""
     engine = create_db_engine(Settings(db_url=f"sqlite:///{tmp_path / 'store.db'}"))
     try:
         upgrade(engine)
@@ -70,6 +84,7 @@ def test_migration_roundtrip_and_metadata_parity(tmp_path: Path) -> None:
 
 
 def test_all_models_and_documents_roundtrip() -> None:
+    """Verify all models and documents roundtrip."""
     engine = create_db_engine(Settings(db_url="sqlite://"))
     upgrade(engine)
     instant = datetime(2026, 1, 2, 3, 4, 5, 123456, tzinfo=timezone(timedelta(hours=2)))
@@ -152,6 +167,7 @@ def test_all_models_and_documents_roundtrip() -> None:
 
 @pytest.mark.parametrize("model", [Activity, DailySleep, DailyHRV, DailyStress, SyncState])
 def test_composite_keys_reject_duplicates_and_allow_other_providers(model: type[Base]) -> None:
+    """Verify composite keys reject duplicates and allow other providers."""
     engine = create_db_engine(Settings(db_url="sqlite://"))
     upgrade(engine)
     try:
@@ -179,6 +195,7 @@ def test_composite_keys_reject_duplicates_and_allow_other_providers(model: type[
 
 
 def test_utc_rejects_naive_and_keeps_fractional_seconds() -> None:
+    """Verify utc rejects naive and keeps fractional seconds."""
     kind = UTCDateTime()
     for dialect in (sqlite.dialect(), oracle.dialect()):
         with pytest.raises(ValueError, match="timezone-aware"):
@@ -197,6 +214,7 @@ def test_utc_rejects_naive_and_keeps_fractional_seconds() -> None:
 
 @pytest.mark.parametrize("document", [{}, [], {"a": [0, None, "é"]}, [1, 2]])
 def test_json_documents(document: object) -> None:
+    """Verify json documents."""
     kind = JSONDocument()
     dialect = sqlite.dialect()
     encoded = kind.process_bind_param(document, dialect)
@@ -206,12 +224,14 @@ def test_json_documents(document: object) -> None:
 
 @pytest.mark.parametrize("document", ["scalar", 1, {"bad": float("nan")}, {"bad": object()}])
 def test_invalid_documents_are_rejected_without_values(document: object) -> None:
+    """Verify invalid documents are rejected without values."""
     with pytest.raises(ValueError) as error:
         JSONDocument().process_bind_param(document, sqlite.dialect())
     assert "scalar" not in str(error.value)
 
 
 def test_oracle_json_fallback_evidence() -> None:
+    """Verify oracle json fallback evidence."""
     assert not hasattr(oracle, "JSON")
     table = Table("json_probe", MetaData(), Column("payload", JSON()))
     with pytest.raises(CompileError):
@@ -220,6 +240,7 @@ def test_oracle_json_fallback_evidence() -> None:
 
 
 def test_offline_oracle_ddl_and_snapshot() -> None:
+    """Verify offline oracle ddl and snapshot."""
     ddl = offline_sql("oracle")
     for table in Base.metadata.tables:
         assert f"CREATE TABLE {table} (" in ddl
@@ -241,6 +262,7 @@ def test_offline_oracle_ddl_and_snapshot() -> None:
 
 
 def test_offline_oracle_downgrade_revokes_before_dropping() -> None:
+    """Verify offline oracle downgrade revokes before dropping."""
     buffer = StringIO()
     config = migration_config()
     config.output_buffer = buffer
@@ -254,6 +276,7 @@ def test_offline_oracle_downgrade_revokes_before_dropping() -> None:
 
 
 def test_large_document_roundtrip() -> None:
+    """Verify large document roundtrip."""
     engine = create_db_engine(Settings(db_url="sqlite://"))
     upgrade(engine)
     document = {"synthetic": "é" * 40000, "values": [0, None, {}]}
@@ -270,6 +293,7 @@ def test_large_document_roundtrip() -> None:
 
 
 def test_stress_range_and_foreign_key() -> None:
+    """Verify stress range and foreign key."""
     engine = create_db_engine(Settings(db_url="sqlite://"))
     upgrade(engine)
     try:

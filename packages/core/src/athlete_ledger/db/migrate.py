@@ -1,4 +1,9 @@
-"""Programmatic migrations and credential-free offline DDL generation."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Programmatic migrations and credential-free offline DDL generation.
+"""  # noqa: D205, D212
 
 from dataclasses import dataclass
 from io import StringIO
@@ -17,14 +22,26 @@ DialectName = Literal["oracle", "sqlite"]
 
 
 def migration_config() -> Config:
-    """Locate migrations shipped inside the installed package, without an ini URL."""
+    """Locate migrations shipped inside the installed package, without an ini URL.
+
+    Returns:
+        The operation result.
+    """
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
     return config
 
 
 def upgrade(engine: Engine, revision: str = "head") -> None:
-    """Apply migrations to the given engine without logging SQL parameters."""
+    """Apply migrations to the given engine without logging SQL parameters.
+
+    Args:
+        engine: Engine for this operation.
+        revision: Revision for this operation.
+
+    Raises:
+        DatabaseError: If the operation cannot be completed.
+    """
     try:
         with engine.begin() as connection:
             config = migration_config()
@@ -38,7 +55,15 @@ def upgrade(engine: Engine, revision: str = "head") -> None:
 
 
 def downgrade(engine: Engine, revision: str = "base") -> None:
-    """Downgrade a database, primarily for disposable development databases."""
+    """Downgrade a database, primarily for disposable development databases.
+
+    Args:
+        engine: Engine for this operation.
+        revision: Revision for this operation.
+
+    Raises:
+        DatabaseError: If the operation cannot be completed.
+    """
     try:
         with engine.begin() as connection:
             config = migration_config()
@@ -49,7 +74,14 @@ def downgrade(engine: Engine, revision: str = "base") -> None:
 
 
 def offline_sql(dialect: DialectName = "oracle") -> str:
-    """Render all upgrades without settings, credentials or a database connection."""
+    """Render all upgrades without settings, credentials or a database connection.
+
+    Args:
+        dialect: Dialect for this operation.
+
+    Returns:
+        The operation result.
+    """
     buffer = StringIO()
     config = migration_config()
     config.output_buffer = buffer
@@ -68,7 +100,17 @@ class DatabaseStatus:
 
 
 def check_database(engine: Engine) -> DatabaseStatus:
-    """Connect and report backend, server version and the applied migration."""
+    """Connect and report backend, server version and the applied migration.
+
+    Args:
+        engine: Engine for this operation.
+
+    Returns:
+        The operation result.
+
+    Raises:
+        DatabaseError: If the operation cannot be completed.
+    """
     try:
         with engine.connect() as connection:
             revision = MigrationContext.configure(connection).get_current_revision()

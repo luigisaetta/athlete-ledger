@@ -1,7 +1,11 @@
-"""Initial ledger schema, generated from the Phase 1a models.
-
-This snapshot remains independent of future model changes.
 """
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Initial ledger schema, generated from the Phase 1a models.
+
+    This snapshot remains independent of future model changes.
+"""  # noqa: D205, D212
 
 import sqlalchemy as sa
 from alembic import op
@@ -25,7 +29,11 @@ TABLE_NAMES = (
 
 
 def _reader_privileges(action: str) -> None:
-    """Grant/revoke the read-only role on ledger and revision tables."""
+    """Grant/revoke the read-only role on ledger and revision tables.
+
+    Args:
+        action: Action for this operation.
+    """
     if op.get_context().dialect.name == "oracle":
         for table in TABLE_NAMES:
             if action == "grant":

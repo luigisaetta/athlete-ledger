@@ -1,4 +1,9 @@
-"""Portable document storage and UTC timestamps."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Portable document storage and UTC timestamps.
+"""  # noqa: D205, D212
 
 import json
 from datetime import UTC, datetime
@@ -24,9 +29,29 @@ class JSONDocument(TypeDecorator[JSONValue]):
     cache_ok = True
 
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[Any]:
+        """Handle load dialect impl.
+
+        Args:
+            dialect: Dialect for this operation.
+
+        Returns:
+            The operation result.
+        """
         return dialect.type_descriptor(CLOB() if dialect.name == "oracle" else Text())
 
     def process_bind_param(self, value: JSONValue | None, dialect: Dialect) -> str | None:
+        """Handle process bind param.
+
+        Args:
+            value: Value for this operation.
+            dialect: Dialect for this operation.
+
+        Returns:
+            The operation result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
+        """
         if value is None:
             return None
         if not isinstance(value, dict | list):
@@ -37,6 +62,18 @@ class JSONDocument(TypeDecorator[JSONValue]):
             raise ValueError("Invalid JSON document.") from None
 
     def process_result_value(self, value: Any, dialect: Dialect) -> JSONValue | None:
+        """Handle process result value.
+
+        Args:
+            value: Value for this operation.
+            dialect: Dialect for this operation.
+
+        Returns:
+            The operation result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
+        """
         if value is None:
             return None
         # Drivers can decode columns marked IS JSON before the SQLAlchemy hook.
@@ -53,11 +90,31 @@ class UTCDateTime(TypeDecorator[datetime]):
     cache_ok = True
 
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[Any]:
+        """Handle load dialect impl.
+
+        Args:
+            dialect: Dialect for this operation.
+
+        Returns:
+            The operation result.
+        """
         if dialect.name == "oracle":
             return dialect.type_descriptor(TIMESTAMP(timezone=False))
         return dialect.type_descriptor(DateTime(timezone=False))
 
     def process_bind_param(self, value: datetime | None, dialect: Dialect) -> datetime | None:
+        """Handle process bind param.
+
+        Args:
+            value: Value for this operation.
+            dialect: Dialect for this operation.
+
+        Returns:
+            The operation result.
+
+        Raises:
+            ValueError: If the operation cannot be completed.
+        """
         if value is None:
             return None
         if value.tzinfo is None or value.utcoffset() is None:
@@ -65,6 +122,15 @@ class UTCDateTime(TypeDecorator[datetime]):
         return value.astimezone(UTC).replace(tzinfo=None)
 
     def process_result_value(self, value: datetime | None, dialect: Dialect) -> datetime | None:
+        """Handle process result value.
+
+        Args:
+            value: Value for this operation.
+            dialect: Dialect for this operation.
+
+        Returns:
+            The operation result.
+        """
         if value is None:
             return None
         if value.tzinfo is None:

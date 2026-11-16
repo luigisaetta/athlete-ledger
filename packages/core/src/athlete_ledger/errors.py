@@ -1,4 +1,9 @@
-"""Public exceptions with messages safe for command-line output."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Public exceptions with messages safe for command-line output.
+"""  # noqa: D205, D212
 
 import re
 
@@ -14,6 +19,12 @@ class SettingsIssue(ValueError):
     """A model-level validation failure with field names separate from values."""
 
     def __init__(self, message: str, fields: tuple[str, ...]) -> None:
+        """Handle   init  .
+
+        Args:
+            message: Message for this operation.
+            fields: Fields for this operation.
+        """
         super().__init__(message)
         self.fields = fields
 
@@ -30,12 +41,25 @@ class DatabaseError(LedgerError):
     """A database operation failed without exposing driver diagnostics."""
 
     def __init__(self, message: str, *, code: str | None = None) -> None:
+        """Handle   init  .
+
+        Args:
+            message: Message for this operation.
+            code: Code for this operation.
+        """
         super().__init__(message)
         self.code = code if code is not None and _DATABASE_CODE.fullmatch(code) else None
 
 
 def database_error_code(error: BaseException) -> str | None:
-    """Extract only an ORA/DPY code, never SQL statements or bound parameters."""
+    """Extract only an ORA/DPY code, never SQL statements or bound parameters.
+
+    Args:
+        error: Error for this operation.
+
+    Returns:
+        The operation result.
+    """
     seen: set[int] = set()
     while isinstance(error, StatementError):
         seen.add(id(error))

@@ -1,4 +1,9 @@
-"""Database configuration loaded without opening connections."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Database configuration loaded without opening connections.
+"""  # noqa: D205, D212
 
 from pathlib import Path
 from typing import Self
@@ -35,17 +40,32 @@ class Settings(BaseSettings):
 
     @property
     def backend(self) -> str:
-        """Return the configured backend without revealing its address."""
+        """Return the configured backend without revealing its address.
+
+        Returns:
+            The operation result.
+        """
         return "oracle" if self.db_dsn else "sqlite"
 
     @property
     def sqlite_url(self) -> str:
-        """Return the explicit SQLite URL or the local default."""
+        """Return the explicit SQLite URL or the local default.
+
+        Returns:
+            The operation result.
+        """
         return self.db_url or DEFAULT_DB_URL
 
     @model_validator(mode="after")
     def validate_database(self) -> Self:
-        """Reject incomplete Oracle settings and incompatible selectors."""
+        """Reject incomplete Oracle settings and incompatible selectors.
+
+        Returns:
+            The operation result.
+
+        Raises:
+            SettingsIssue: If the operation cannot be completed.
+        """
         if self.db_dsn:
             if self.db_url:
                 raise SettingsIssue(
@@ -83,7 +103,14 @@ class Settings(BaseSettings):
 
 
 def validation_environment_names(error: ValidationError) -> list[str]:
-    """Return allowlisted environment names without rendering messages or inputs."""
+    """Return allowlisted environment names without rendering messages or inputs.
+
+    Args:
+        error: Error for this operation.
+
+    Returns:
+        The operation result.
+    """
     allowed = {name: f"ATHLETE_LEDGER_{name.upper()}" for name in Settings.model_fields}
     fields: set[str] = set()
     for detail in error.errors(include_input=False, include_url=False):

@@ -1,4 +1,9 @@
-"""Run migrations with an explicitly supplied connection or offline dialect."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Run migrations with an explicitly supplied connection or offline dialect.
+"""  # noqa: D205, D212
 
 from alembic import context
 from sqlalchemy.engine import Connection

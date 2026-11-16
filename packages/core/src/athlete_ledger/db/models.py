@@ -1,4 +1,9 @@
-"""Provider-scoped ledger schema; every metric is nullable and names carry units."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Provider-scoped ledger schema; every metric is nullable and names carry units.
+"""  # noqa: D205, D212
 
 from datetime import UTC, date, datetime
 
@@ -21,7 +26,11 @@ from athlete_ledger.db.types import JSONDocument, JSONValue, UTCDateTime
 
 
 def utc_now() -> datetime:
-    """Return an aware fetch/update timestamp."""
+    """Return an aware fetch/update timestamp.
+
+    Returns:
+        The operation result.
+    """
     return datetime.now(UTC)
 
 

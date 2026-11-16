@@ -1,4 +1,9 @@
-"""Exercise the installed database CLI with isolated SQLite configuration."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Exercise the installed database CLI with isolated SQLite configuration.
+"""  # noqa: D205, D212
 
 import os
 import subprocess
@@ -10,6 +15,7 @@ from athlete_ledger.errors import DatabaseError
 
 
 def test_sqlite_cli_upgrade_and_check(tmp_path: Path) -> None:
+    """Verify sqlite cli upgrade and check."""
     env = dict(os.environ, ATHLETE_LEDGER_DB_URL=f"sqlite:///{tmp_path / 'nested' / 'cli.db'}")
     for args in (["--version"], ["db", "upgrade"], ["db", "upgrade"], ["db", "check"]):
         result = subprocess.run(
@@ -24,6 +30,7 @@ def test_sqlite_cli_upgrade_and_check(tmp_path: Path) -> None:
 def test_cli_offline_ignores_incomplete_oracle_settings(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Verify cli offline ignores incomplete oracle settings."""
     monkeypatch.setenv("ATHLETE_LEDGER_DB_DSN", "synthetic_low")
     assert run(["db", "sql"]) == 0
     assert "CREATE TABLE raw_response" in capsys.readouterr().out
@@ -32,6 +39,7 @@ def test_cli_offline_ignores_incomplete_oracle_settings(
 def test_cli_configuration_error_is_sanitized(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Verify cli configuration error is sanitized."""
     monkeypatch.setenv("ATHLETE_LEDGER_DB_URL", "oracle+oracledb://user:synthetic-secret@host")
     assert run(["db", "check"]) == 1
     captured = capsys.readouterr()
@@ -40,6 +48,7 @@ def test_cli_configuration_error_is_sanitized(
 
 
 def test_installed_cli_validation_failure_never_prints_values() -> None:
+    """Verify installed cli validation failure never prints values."""
     env = dict(
         os.environ,
         ATHLETE_LEDGER_DB_URL="oracle+oracledb://synthetic-user:synthetic-password@synthetic-host",
@@ -55,7 +64,18 @@ def test_installed_cli_validation_failure_never_prints_values() -> None:
 def test_cli_driver_error_is_sanitized(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Verify cli driver error is sanitized."""
+
     def failed(*args: object, **kwargs: object) -> None:
+        """Handle failed.
+
+        Args:
+            *args: Args for this operation.
+            **kwargs: Kwargs for this operation.
+
+        Raises:
+            DatabaseError: If the operation cannot be completed.
+        """
         raise DatabaseError("synthetic-password synthetic-health-payload")
 
     monkeypatch.setattr("athlete_ledger.cli.check_database", failed)
@@ -70,6 +90,7 @@ def test_cli_driver_error_is_sanitized(
 def test_cli_lists_missing_oracle_environment_names(
     command: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Verify cli lists missing oracle environment names."""
     monkeypatch.setenv("ATHLETE_LEDGER_DB_DSN", "synthetic-private-alias")
     assert run(["db", command]) == 1
     output = capsys.readouterr()
@@ -86,6 +107,7 @@ def test_cli_lists_missing_oracle_environment_names(
 def test_cli_names_only_the_missing_oracle_variable(
     missing: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Verify cli names only the missing oracle variable."""
     values = {
         "DB_DSN": "synthetic-private-alias",
         "DB_USER": "synthetic-private-user",
@@ -106,6 +128,7 @@ def test_cli_names_only_the_missing_oracle_variable(
 def test_cli_names_conflicting_selectors_without_values(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Verify cli names conflicting selectors without values."""
     monkeypatch.setenv("ATHLETE_LEDGER_DB_URL", "sqlite:///synthetic-private-path.db")
     monkeypatch.setenv("ATHLETE_LEDGER_DB_DSN", "synthetic-private-alias")
     monkeypatch.setenv("ATHLETE_LEDGER_DB_PASSWORD", "synthetic-private-password")
@@ -121,10 +144,16 @@ def test_cli_names_conflicting_selectors_without_values(
 def test_cli_field_validation_prints_only_allowlisted_names(
     field: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Verify cli field validation prints only allowlisted names."""
     from athlete_ledger.settings import Settings
     from pydantic import ValidationError
 
     def invalid() -> Settings:
+        """Handle invalid.
+
+        Returns:
+            The operation result.
+        """
         return Settings(**{field: ["synthetic-password", "synthetic-value"]})
 
     monkeypatch.setattr("athlete_ledger.cli.Settings", invalid)
@@ -135,6 +164,11 @@ def test_cli_field_validation_prints_only_allowlisted_names(
 
     # Unknown error locations and contexts must not be echoed as environment names.
     def unknown() -> None:
+        """Handle unknown.
+
+        Raises:
+            ValidationError.from_exception_data: If the operation cannot be completed.
+        """
         raise ValidationError.from_exception_data(
             "Settings",
             [
@@ -162,9 +196,19 @@ def test_cli_preserves_only_database_codes_through_wrappers(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Verify cli preserves only database codes through wrappers."""
     from sqlalchemy.exc import OperationalError
 
     def fail_connect(*args: object, **kwargs: object) -> None:
+        """Handle fail connect.
+
+        Args:
+            *args: Args for this operation.
+            **kwargs: Kwargs for this operation.
+
+        Raises:
+            OperationalError: If the operation cannot be completed.
+        """
         message = f"{code or 'driver failure'}: synthetic-password synthetic-private-dsn"
         raise OperationalError(
             "SELECT 'synthetic-sensitive-sql'",
@@ -189,12 +233,22 @@ def test_cli_structured_driver_codes_without_message_or_sql(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Verify cli structured driver codes without message or sql."""
     from types import SimpleNamespace
 
     import oracledb
     from sqlalchemy.exc import OperationalError
 
     def failed(*args: object, **kwargs: object) -> None:
+        """Handle failed.
+
+        Args:
+            *args: Args for this operation.
+            **kwargs: Kwargs for this operation.
+
+        Raises:
+            OperationalError: If the operation cannot be completed.
+        """
         original = oracledb.DatabaseError(
             SimpleNamespace(
                 full_code=code,
@@ -220,7 +274,18 @@ def test_cli_structured_driver_codes_without_message_or_sql(
 def test_cli_os_error_type_without_message_or_filename(
     error_type: type[OSError], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
+    """Verify cli os error type without message or filename."""
+
     def failed(*args: object, **kwargs: object) -> None:
+        """Handle failed.
+
+        Args:
+            *args: Args for this operation.
+            **kwargs: Kwargs for this operation.
+
+        Raises:
+            error_type: If the operation cannot be completed.
+        """
         raise error_type(
             None, "synthetic-password synthetic-health-value", "/synthetic/private/wallet"
         )

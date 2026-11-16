@@ -1,4 +1,9 @@
-"""Local database administration commands with sanitized error output."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Local database administration commands with sanitized error output.
+"""  # noqa: D205, D212
 
 import argparse
 import sys
@@ -19,7 +24,16 @@ from athlete_ledger.settings import Settings, validation_environment_names
 def run(
     argv: Sequence[str] | None = None, *, require_oracle: bool = False, show_banner: bool = True
 ) -> int:
-    """Execute a command, returning an exit status without printing driver errors."""
+    """Execute a command, returning an exit status without printing driver errors.
+
+    Args:
+        argv: Argv for this operation.
+        require_oracle: Require oracle for this operation.
+        show_banner: Show banner for this operation.
+
+    Returns:
+        The operation result.
+    """
     parser = argparse.ArgumentParser(prog="athlete-ledger")
     parser.add_argument("--version", action="version", version=f"athlete-ledger {__version__}")
     commands = parser.add_subparsers(dest="command")
@@ -79,5 +93,9 @@ def run(
 
 
 def main() -> None:
-    """Dispatch the installed command."""
+    """Dispatch the installed command.
+
+    Raises:
+        SystemExit: If the operation cannot be completed.
+    """
     raise SystemExit(run())
