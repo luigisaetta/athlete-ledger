@@ -123,6 +123,7 @@ def validation_environment_names(error: ValidationError) -> list[str]:
         )
         for name in Settings.model_fields
     }
+    allowed.update({environment: environment for environment in tuple(allowed.values())})
     fields: set[str] = set()
     for detail in error.errors(include_input=False, include_url=False):
         location = detail["loc"]
@@ -131,4 +132,4 @@ def validation_environment_names(error: ValidationError) -> list[str]:
         issue = detail.get("ctx", {}).get("error")
         if isinstance(issue, SettingsIssue):
             fields.update(name for name in issue.fields if name in allowed)
-    return sorted(allowed[name] for name in fields)
+    return sorted({allowed[name] for name in fields})
