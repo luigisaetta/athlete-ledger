@@ -259,7 +259,7 @@ and should finish with:
   [OK] Database connection verified.
        Backend: oracle
        Server version: <your database version>
-  [OK] Alembic revision: 0001_ledger_store
+  [OK] Alembic revision: 0002_activity_training_metrics
   [OK] Oracle schema setup completed.
 ```
 
@@ -283,6 +283,26 @@ remains the owner; no users or roles are created by this script. Do not run migr
 [sql/oracle/schema.sql](../sql/oracle/schema.sql) is the generated review snapshot. **Do not apply
 it again after the Python migration**, and do not hand-create the ledger tables from examples.
 
+### Upgrading an existing database
+
+Use the schema owner's configured credentials, not ADMIN or `ATHLETE_LEDGER_RO`, and run:
+
+```sh
+athlete-ledger db upgrade
+athlete-ledger db check
+```
+
+Alternatively, `python scripts/create_tables.py` performs both steps. The expected revision is
+`0002_activity_training_metrics`. Alembic applies only pending revisions; the bootstrap SQL does
+not need to be rerun for this upgrade. Existing table-level SELECT grants to
+`ATHLETE_LEDGER_READER` already cover the added columns, so this revision changes no grants.
+
+The 19 new activity training metric columns are nullable and remain NULL after this schema-only
+patch. Existing rows and values are preserved; normalization and rebuilding from saved raw
+responses will follow in the next patch, then MCP exposure in a later patch. After upgrading,
+verify `athlete-ledger sync run` still succeeds and the existing MCP server works with the reader
+account. Do not apply the generated full-schema snapshot on top of an upgraded database.
+
 ## 9. Verify repeatability and the generated schema
 
 Run the creation script again, then check independently:
@@ -292,7 +312,7 @@ python scripts/create_tables.py
 athlete-ledger db check
 ```
 
-Both should succeed with revision `0001_ledger_store`. A successful repeat applies no new migration
+Both should succeed with revision `0002_activity_training_metrics`. A successful repeat applies no new migration
 and creates no duplicate tables. This does not promise automatic recovery from a failed first run:
 Oracle DDL auto-commits and can leave partial objects behind.
 
