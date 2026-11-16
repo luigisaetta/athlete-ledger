@@ -68,19 +68,19 @@ def raw_response(**kwargs: object) -> RawResponse:
 
 
 def test_migration_roundtrip_and_metadata_parity(tmp_path: Path) -> None:
-    """Verify migration roundtrip and metadata parity."""
+    """Reach the current head repeatedly, compare all model metadata and support a full rollback."""
     engine = create_db_engine(Settings(db_url=f"sqlite:///{tmp_path / 'store.db'}"))
     try:
         upgrade(engine)
         upgrade(engine)
         assert set(inspect(engine).get_table_names()) == {*Base.metadata.tables, "alembic_version"}
-        assert check_database(engine).revision == "0001_ledger_store"
+        assert check_database(engine).revision == "0002_activity_training_metrics"
         with engine.connect() as connection:
             assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
         downgrade(engine)
         assert inspect(engine).get_table_names() == ["alembic_version"]
         upgrade(engine)
-        assert check_database(engine).revision == "0001_ledger_store"
+        assert check_database(engine).revision == "0002_activity_training_metrics"
     finally:
         engine.dispose()
 
