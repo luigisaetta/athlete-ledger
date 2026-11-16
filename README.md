@@ -248,6 +248,43 @@ days plus any newer days through today. If no committed date exists, the command
 backfill is needed. `sync status` reads only dataset progress dates, run timestamps and status;
 it does not discover credentials, construct a provider or contact the API.
 
+Inspect the downloaded date coverage without contacting the API:
+
+```sh
+athlete-ledger sync coverage
+athlete-ledger sync coverage --dataset sleep hrv
+```
+
+For each dataset, `sync coverage` merges overlapping or adjacent inclusive ranges and prints
+`covered` intervals with `from`, `to` and calendar-day counts. It also shows each internal `gap`
+and a separate `tail` from the last downloaded day plus one through the machine's local today.
+No dates before the first downloaded interval are inferred. A dataset without ranges reports
+`nothing downloaded` rather than guessing a historical start date. A single interval without
+internal gaps uses `[OK]`; other datasets and gap/tail lines use `[INFO]`. A tail is informational
+and may still follow an `[OK]` interval.
+
+Coverage is derived from the committed `raw_response` chunk boundaries, filtered by provider
+and dataset endpoint. The query selects only distinct `range_start`/`range_end` pairs, never JSON
+payloads or request parameters. Normalized records are not used: a day with no activity, an empty
+response or a missing daily summary can still belong to a successfully downloaded interval.
+Failed chunks are rolled back and leave no new coverage; unchanged responses already have a
+saved range. Coverage describes requested date ranges, not the number or completeness of records
+returned by the provider. The progress date shown by `sync status` is only a high-water mark and
+cannot reveal holes between older and newer downloads.
+
+Each internal gap is followed by a dataset-specific backfill command. For example, if synthetic
+sleep downloads cover January 1–7 and January 10–20, the missing January 8–9 range can be filled by:
+
+```sh
+athlete-ledger sync backfill --since 2026-01-08 --until 2026-01-09 --dataset sleep
+athlete-ledger sync coverage --dataset sleep
+```
+
+The coverage command reads only the database, does not discover an API key or construct a
+provider, and does not change sync progress. Only the suggested backfill command contacts the
+API when you choose to run it. After the Phase 1b real-data checks, verify `sync coverage` on ADB
+and confirm that the downloaded ranges, any internal gaps and the unsynced tail match your runs.
+
 Requests use inclusive windows of at most seven days. Activities are paged with limit 100 through
 an empty terminating page, deduplicating activity IDs and rejecting pagination that makes no
 progress. Every chunk commits raw responses, normalized rows and state together. On failure, that
