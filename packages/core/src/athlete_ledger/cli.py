@@ -62,7 +62,7 @@ def run(
         if args.command == "db" and args.db_command == "sql":
             print(offline_sql(args.dialect), end="")
             return 0
-        if show_banner and not (args.command == "sync" and args.sync_command == "coverage"):
+        if show_banner:
             banner(
                 "Summary sync"
                 if args.command == "sync"

@@ -248,7 +248,8 @@ days plus any newer days through today. If no committed date exists, the command
 backfill is needed. `sync status` reads only dataset progress dates, run timestamps and status;
 it does not discover credentials, construct a provider or contact the API.
 
-Inspect the downloaded date coverage without contacting the API:
+Inspect the downloaded date coverage without contacting the API. Like the other sync commands,
+it shows the standard banner in an interactive terminal; redirected output omits the banner:
 
 ```sh
 athlete-ledger sync coverage
