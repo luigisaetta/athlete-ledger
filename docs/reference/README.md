@@ -222,7 +222,7 @@ Report counts, date ranges and sanitized status codes only; do not attach raw pa
 Installed versions: `mcp==2.3.0`, `mcp-types==2.3.0`. Reviewed the installed distribution's
 README in METADATA and Python docstrings, `server/mcpserver/server.py`, `tools/base.py`,
 `tools/tool_manager.py`, `utilities/func_metadata.py`, `utilities/logging.py`,
-`client/client.py`, `client/_memory.py`, `client/stdio.py`, `shared/memory.py`,
+`client/client.py`, `client/_memory.py`, `client/stdio.py`, `cli/cli.py`, `shared/memory.py`,
 `server/_otel.py` and `mcp_types/version.py` / `_types.py` before server implementation.
 
 Verified API contracts:
@@ -247,4 +247,12 @@ Verified API contracts:
   isolates dependency loggers and emits only controlled stderr diagnostics. SDK tracing uses
   `opentelemetry-api`; the CLI configures its public no-op tracer provider, with no exporter.
 
-No HTTP transport, provider access or telemetry exporter is configured for Phase 2.
+The installed CLI's Inspector launcher invokes `npx @modelcontextprotocol/inspector` followed
+by the server command; the README applies that same argument ordering to the installed ledger
+entry point without the SDK CLI extra or a separate project environment.
+
+Verification uses the SDK in-process client and stdio subprocesses in both modern and legacy
+modes. A raw stdout smoke check also verifies newline-delimited JSON-RPC without banners or
+prints. Reader tests inspect Oracle engine construction and the schema hook without connecting;
+all actual database tests use synthetic SQLite fixtures. Inspector/desktop and ADB behavior
+remain maintainer checks. No HTTP transport, provider access or telemetry exporter is configured.
