@@ -99,12 +99,86 @@ athlete-ledger-mcp
 athlete-ledger-agent
 ```
 
-The skeleton contains no provider, database, MCP server, or agent implementation yet. Planned
-configuration names are listed with empty values in `.env.example`; settings loading starts in a
-later phase. API references and verification gaps are in [docs/reference/README.md](docs/reference/README.md).
+The ledger store supports SQLite and Oracle ADB. Provider synchronization, the MCP server and
+the agent will be implemented in later phases. Configuration names are listed with empty values
+in `.env.example`. API references and verification gaps are in
+[docs/reference/README.md](docs/reference/README.md).
 Contributors and coding agents: see [AGENTS.md](AGENTS.md).
 
-Phase 0 requires local checks only.
+Acceptance currently uses local checks.
+
+## Database
+
+Activate the Conda environment as described above. With no database variables set, SQLite uses
+`sqlite:///./data/athlete_ledger.db` relative to the current directory. Parent directories are created
+when needed. Apply the packaged Alembic migrations, then check the database:
+
+```sh
+athlete-ledger db upgrade
+athlete-ledger db check
+athlete-ledger --version
+```
+
+Settings are read from environment variables and an optional `.env` in the current directory;
+environment variables take precedence and empty environment-file entries are ignored. To use a
+different SQLite file, set `ATHLETE_LEDGER_DB_URL` to its SQLAlchemy SQLite URL. Do not set it
+together with `ATHLETE_LEDGER_DB_DSN`.
+
+For Oracle ADB, keep the unzipped wallet outside this repository. Using SQLcl, connect as `ADMIN`
+through the wallet and run [sql/oracle/00_bootstrap.sql](sql/oracle/00_bootstrap.sql). The script
+prompts for owner and reader passwords with hidden input, creates `ATHLETE_LEDGER`, the
+`ATHLETE_LEDGER_READER` role, and `ATHLETE_LEDGER_RO`. It assigns the owner a 1G quota on `DATA`
+and only `CREATE SESSION`, `CREATE TABLE`, `CREATE SEQUENCE`, and `CREATE VIEW`. The reader gets
+only `CREATE SESSION` and the reader role. Reruns preserve existing passwords and reapply the
+quota/grants; they do not remove pre-existing privileges. Use dedicated accounts and review their
+privileges if they already existed. Follow the script's supported password character set and ADB
+complexity rules; keep spooling/session recording off during bootstrap.
+
+Configure the following privately in your environment or local `.env`, then run the same
+`db upgrade` and `db check` commands as the schema owner:
+
+| Variable | Purpose |
+|---|---|
+| `ATHLETE_LEDGER_DB_USER` | `ATHLETE_LEDGER` schema owner |
+| `ATHLETE_LEDGER_DB_PASSWORD` | Owner password |
+| `ATHLETE_LEDGER_DB_DSN` | TNS alias from the wallet's `tnsnames.ora` |
+| `ATHLETE_LEDGER_DB_WALLET_DIR` | Directory containing `tnsnames.ora` and `ewallet.pem` |
+| `ATHLETE_LEDGER_DB_WALLET_PASSWORD` | Wallet password for thin-mode mTLS |
+| `ATHLETE_LEDGER_RO_DB_USER` | `ATHLETE_LEDGER_RO`, reserved for the later MCP server |
+| `ATHLETE_LEDGER_RO_DB_PASSWORD` | Reader password, reserved for the later MCP server |
+
+Leave `ATHLETE_LEDGER_DB_URL` unset for Oracle. The engine uses `oracle+oracledb` in thin mode;
+the wallet directory is passed as both `config_dir` and `wallet_location`. No Oracle Client
+installation or `init_oracle_client()` call is needed. `db check` prints only backend, server
+version and Alembic revision. Failures return a nonzero exit status: settings diagnostics list only
+the missing or invalid environment variable names; database diagnostics show only an available
+`ORA-nnnnn` or `DPY-nnnn` code; filesystem diagnostics show only the `OSError` type. Original error
+messages, settings values, paths, SQL and bound parameters are not printed. Successful Phase 1a
+upgrades report `0001_ledger_store`; an empty database reports `unversioned`.
+
+Generate the reviewable Oracle schema from Alembic without connecting:
+
+```sh
+athlete-ledger db sql --dialect oracle > sql/oracle/schema.sql
+athlete-ledger db sql --dialect sqlite
+```
+
+The snapshot is checked by tests; regenerate it after migration changes. It is an offline
+representation of the same migrations, not an additional script to apply after `db upgrade`.
+Oracle DDL auto-commits, so an interrupted migration may require inspection before retrying.
+
+Documents use text storage on SQLite and CLOB with `IS JSON` constraints on Oracle, because the
+locked SQLAlchemy 2.0 dialect cannot compile native JSON. Replace JSON documents as a whole;
+in-place mutations are not tracked. Fetch/update timestamps round-trip as aware UTC datetimes,
+stored as naive UTC (`TIMESTAMP` on Oracle). Activity `start_time_local` is deliberately a naive
+provider-local wall time and does not identify a timezone.
+
+Before starting sync development, the maintainer must verify bootstrap and grants on ADB,
+wallet mTLS, repeatable `db upgrade`, and `db check`. Also test synthetic object/list JSON
+round-trips (including Unicode, SQL NULL and a document larger than 32 KiB), invalid JSON rejection,
+UTC timestamps, and reader access: qualified `SELECT` on the owner tables succeeds while DML and
+DDL fail. Reader sessions use `ATHLETE_LEDGER.<table>`; no synonyms or default-schema changes are
+created. These live Oracle checks have not been run by the test suite.
 
 ## Disclaimer
 

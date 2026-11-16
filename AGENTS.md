@@ -67,6 +67,7 @@ athlete-ledger/
 ├── ui/                     Next.js app (Phase 5; do not create before)
 ├── docs/reference/         summaries + links of external specs (see Phase 0)
 ├── .env.example            variable names only, no values
+├── sql/oracle/             Oracle bootstrap script + generated DDL (Phase 1a)
 └── .github/workflows/ci.yml # deferred; see the GitHub Actions rule below
 ```
 
@@ -96,11 +97,20 @@ Settings are loaded with `pydantic-settings` from the environment and an optiona
 Keep `.env.example` in sync with the variables actually used. Planned names:
 
 - `GARMIN_PERSONAL_API_KEY`: the SDK's standard variable (alternatively the SDK default key file).
-- `ATHLETE_LEDGER_DB_URL`: SQLAlchemy URL; default `sqlite:///./data/athlete_ledger.db`.
-  For ADB: `oracle+oracledb://...` (credentials via the URL or separate variables below).
-- `ATHLETE_LEDGER_DB_USER`, `ATHLETE_LEDGER_DB_PASSWORD`, `ATHLETE_LEDGER_DB_DSN`,
-  `ATHLETE_LEDGER_DB_WALLET_DIR` (optional, mTLS only).
-- `OCI_GENAI_BASE_URL`, `OCI_GENAI_API_KEY`, `OCI_GENAI_MODEL` (agent, Phase 4).
+- `ATHLETE_LEDGER_DB_URL`: SQLAlchemy URL for SQLite; default `sqlite:///./data/athlete_ledger.db`.
+- Oracle ADB (selected when `ATHLETE_LEDGER_DB_DSN` is set; setting both `ATHLETE_LEDGER_DB_URL`
+  and `ATHLETE_LEDGER_DB_DSN` is a configuration error). Connection is **mTLS with a wallet**:
+  - `ATHLETE_LEDGER_DB_USER`, `ATHLETE_LEDGER_DB_PASSWORD`: schema owner (`ATHLETE_LEDGER`).
+  - `ATHLETE_LEDGER_DB_DSN`: a TNS alias from the wallet's `tnsnames.ora` (e.g. `<db>_low`).
+  - `ATHLETE_LEDGER_DB_WALLET_DIR`: unzipped wallet directory, outside the repository; used as
+    both `config_dir` and `wallet_location`.
+  - `ATHLETE_LEDGER_DB_WALLET_PASSWORD`: wallet password (required by thin mode for mTLS).
+  - `ATHLETE_LEDGER_RO_DB_USER`, `ATHLETE_LEDGER_RO_DB_PASSWORD`: read-only user
+    (`ATHLETE_LEDGER_RO`), consumed by the MCP server from Phase 2.
+- `OCI_GENAI_BASE_URL`, `OCI_GENAI_API_KEY`, `OCI_GENAI_MODEL`, `OCI_GENAI_PROJECT_ID`
+  (agent, Phase 4; the OCI Responses API needs a Generative AI project OCID).
+
+All passwords are `SecretStr`: never in `repr`, logs, exceptions, or CLI output.
 
 ## Phases
 
@@ -110,38 +120,27 @@ and any open questions.
 
 | Phase | Scope | Done when |
 |---|---|---|
-| **0. Foundation (current)** | Workspace, tooling, local checks, `docs/reference/`, `.env.example` | All acceptance checks pass locally on an empty skeleton |
-| 1. Ledger and sync | `core`: Garmin access layer, SQLAlchemy schema, Alembic, `sync backfill --since` and incremental `sync` | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
+| 0. Foundation (done) | Workspace, tooling, local checks, `docs/reference/`, `.env.example` | All acceptance checks pass locally on an empty skeleton |
+| **1a. Ledger store (current)** | `core`: settings, SQLAlchemy engine (SQLite + Oracle mTLS), portable JSON type, models, Alembic, Oracle bootstrap SQL, generated Oracle DDL, `db` CLI | Migrations green on SQLite; Oracle DDL generated and reviewed; maintainer applies bootstrap + migrations on ADB and `db check` passes |
+| 1b. Sync | `core`: Garmin access layer, normalization of the four data areas, `sync backfill --since` and incremental `sync` | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
 | 2. MCP over stdio | Read-only tools on the DB | Works with MCP Inspector and a desktop client |
 | 3. Streamable HTTP | Stateless 2026-07-28 transport + 2025 compatibility | Conformance tests pass |
 | 4. Agent | FastAPI `/chat` SSE, MCP client, OCI Responses tool loop | Answers questions on the four data areas citing dates and numbers |
 | 5. UI | Next.js chat with tool-call cards | End-to-end demo works |
 | 6. Launch prep | Docs, docker compose, packaging | Ready to publish |
 
-### Phase 0 tasks (current)
+### GitHub Actions (standing rule)
 
-1. Root `pyproject.toml` as a **uv workspace** with members `packages/core`, `packages/mcp-server`,
-   `packages/agent`; shared dev dependency group (ruff, mypy, pytest, pre-commit); ruff and mypy config.
-2. Three packages with `src/` layout, `__init__.py` exposing `__version__ = "0.0.1"`, a `py.typed`
-   marker, and one trivial test each (e.g. version import). No feature code yet.
-3. Console entry points reserved but minimal (print version and exit):
-   `athlete-ledger` (core CLI), `athlete-ledger-mcp`, `athlete-ledger-agent`.
-4. `.pre-commit-config.yaml` (ruff lint + format, end-of-file, trailing whitespace, check-yaml,
-   detect-private-key).
-5. **GitHub Actions is deferred and is not required to complete Phase 0.** Do not create or enable
-   `.github/workflows/ci.yml` until the maintainer confirms that the repository has been configured
-   to accept issues and PRs. Only after that confirmation, introduce CI on push and PR with
-   `uv sync --locked`, ruff check, ruff format --check, mypy, and pytest on Python 3.12 and 3.13.
-6. `.env.example` with the variable names listed above, values empty.
-7. `docs/reference/README.md`: for each external spec, the official link plus a short summary
-   **in your own words** of the rules that matter to this project (do not copy documentation text):
-   MCP 2026-07-28 spec and changelog, MCP Python SDK 2.x migration guide, OCI Responses API,
-   OCI OpenAI-compatible endpoints and tool support, Garmin Personal API FAQ and Swagger.
-   Flag anything you could not verify.
-8. Update the README "Development" section with the exact setup commands.
+GitHub Actions is deferred. Do not create or enable `.github/workflows/ci.yml` until the maintainer
+confirms that the repository has been configured to accept issues and PRs. Then introduce CI on push and PR with `uv sync --locked`, ruff check,
+ruff format --check, mypy, and pytest on Python 3.12 and 3.13. Until then, every phase is accepted
+on local checks.
 
-Acceptance, with `conda activate athlete-ledger` and
-`export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"`:
+### Phase 0 (done)
+
+Workspace, three packages, reserved entry points, pre-commit, `.env.example`, `docs/reference/`.
+Local acceptance commands (with `conda activate athlete-ledger` and
+`export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"`), required for **every** phase:
 
 ```sh
 uv sync --all-packages --inexact --locked
@@ -151,11 +150,93 @@ uv run --all-packages --no-sync mypy
 uv run --all-packages --no-sync pytest
 ```
 
-All checks must pass locally. GitHub Actions remains deferred under task 5; a green CI run is not
-a Phase 0 acceptance requirement. Runtime dependencies for later phases are added when their
-features are implemented; Phase 0 packages have no runtime dependencies.
+### Phase 1a tasks (current): ledger store
 
-## Domain notes for Phase 1 (read before starting it)
+Branch `phase-1a-ledger-store`. Scope is the `core` package only; no Garmin calls, no sync logic.
+Decisions already taken (do not revisit): the schema is defined **once** in SQLAlchemy models and
+evolved with Alembic, for portability; Oracle DDL is **generated**, never hand-written, except the
+one-off bootstrap script; ADB connection is mTLS with a wallet.
+
+1. **Dependencies** (`packages/core`): SQLAlchemy 2.0, Alembic, `python-oracledb`, Pydantic v2,
+   `pydantic-settings`. Compatible ranges, lock in `uv.lock`. Do not add the Garmin SDK yet (1b).
+2. **Settings** (`athlete_ledger.settings`): `pydantic-settings` model for the DB variables in
+   *Configuration*; SQLite by default; Oracle when `ATHLETE_LEDGER_DB_DSN` is set; error if both
+   URL and DSN are set, or if Oracle is selected without user, password, wallet dir, or wallet
+   password. Secrets as `SecretStr`.
+3. **Engine factory** (`athlete_ledger.db`): `create_engine` for SQLite (create the parent directory
+   of the file if missing) and for `oracle+oracledb` in **thin mode**, passing `dsn`, `config_dir`,
+   `wallet_location` (both the wallet dir), and `wallet_password` via `connect_args`. Do not call
+   `oracledb.init_oracle_client()` (that is thick mode). No connection is opened at import time.
+4. **Portable types** (`athlete_ledger.db.types`):
+   - `JSONDocument`: round-trips `dict`/`list` on SQLite and Oracle. **First task of the phase:**
+     check whether the locked SQLAlchemy version supports Oracle's native `JSON` type (ADB
+     23ai/26ai). Use it if supported; otherwise fall back to a `TypeDecorator` over CLOB (or BLOB)
+     with an `IS JSON` check constraint. Record the choice and the evidence in
+     `docs/reference/README.md` and in the PR description.
+   - `UTCDateTime`: timezone-aware in Python, stored as UTC on every backend (SQLite has no time
+     zones); reject naive datetimes on write.
+5. **Models** (`athlete_ledger.db.models`, typed `Mapped[...]`). Every table has a `provider`
+   column (string, e.g. `garmin_connect`). Units are part of column names. Avoid Oracle reserved
+   words as identifiers; unquoted lower-case names only.
+   - `raw_response`: surrogate identity PK; `provider`, `endpoint`, `params` (JSON), `range_start`
+     and `range_end` (dates, nullable), `fetched_at` (UTC), `content_sha256` (64 chars),
+     `sdk_version`, `is_empty` (bool), `payload` (JSON, nullable). Append-only: no unique
+     constraint on content; index on `(provider, endpoint, range_start)`.
+   - `activity`: PK `(provider, activity_id)` (big integer); `start_time_local` (naive local time
+     as returned by the provider, documented as such), `activity_name`, `activity_type`,
+     `distance_m`, `duration_s`, `avg_hr_bpm`, `calories_kcal`, `file_status` (default
+     `not_downloaded`), `source_response_id` (FK to `raw_response`), `updated_at` (UTC).
+   - `daily_sleep`: PK `(provider, calendar_date)`; `sleep_time_s`, `deep_sleep_s`,
+     `light_sleep_s`, `rem_sleep_s`, `awake_s`, `nap_time_s`, `sleep_score`, `avg_hr_bpm`,
+     `avg_respiration_brpm`, `source_response_id`, `updated_at`.
+   - `daily_hrv`: PK `(provider, calendar_date)`; `last_night_avg_ms`, `weekly_avg_ms`,
+     `last_night_5min_high_ms`, `baseline_balanced_low_ms`, `baseline_balanced_upper_ms`,
+     `hrv_status`, `source_response_id`, `updated_at`.
+   - `daily_stress`: PK `(provider, calendar_date)`; `overall_stress_level` (0–100), `rest_s`,
+     `low_stress_s`, `medium_stress_s`, `high_stress_s`, `source_response_id`, `updated_at`.
+   - `sync_state`: PK `(provider, dataset)`; `last_synced_date`, `last_run_at` (UTC),
+     `last_status`.
+   All metric columns are nullable (missing data is normal). For reference, the demo scripts read
+   these provider fields: activities `activityId`, `startTimeLocal`, `activityName`,
+   `activityType.typeKey`, `distance`, `duration`, `averageHR`, `calories`; sleep `calendarDate`,
+   `sleepTimeSeconds`, `deepSleepSeconds`, `lightSleepSeconds`, `remSleepSeconds`,
+   `awakeSleepSeconds`, `napTimeSeconds`, `sleepScores.overall.value`, `avgHeartRate`,
+   `averageRespirationValue`; HRV (`hrvSummaries[]`) `lastNightAvg`, `weeklyAvg`,
+   `lastNight5MinHigh`, `baseline.balancedLow`, `baseline.balancedUpper`, `status`; stress
+   `values.overallStressLevel`, `restStressDuration`, `lowStressDuration`,
+   `mediumStressDuration`, `highStressDuration`. The mapping itself is Phase 1b.
+6. **Alembic** inside the `core` package (migrations shipped with the package, configured
+   programmatically from settings, not from a hand-edited `alembic.ini` URL). One initial
+   migration creating all tables. When the dialect is Oracle, the migration also grants
+   `SELECT` on every table to the role `ATHLETE_LEDGER_READER` (and revokes on downgrade).
+7. **Oracle bootstrap** `sql/oracle/00_bootstrap.sql`, run once by the maintainer as `ADMIN` with
+   SQLcl. Passwords come from substitution variables (prompted), never literals. It creates the
+   owner `ATHLETE_LEDGER` (quota on `DATA`; `CREATE SESSION`, `CREATE TABLE`, `CREATE SEQUENCE`,
+   `CREATE VIEW` only), the role `ATHLETE_LEDGER_READER`, and the user `ATHLETE_LEDGER_RO`
+   (`CREATE SESSION` plus the role, nothing else). Idempotent where practical; header comment
+   explains how to run it.
+8. **Generated Oracle DDL** `sql/oracle/schema.sql`: produced by Alembic offline mode for the
+   Oracle dialect (no connection). Add a CLI command to regenerate it and a test that fails if the
+   committed file is out of date.
+9. **CLI** (extend the `athlete-ledger` entry point, `argparse`, no extra framework):
+   - `athlete-ledger db upgrade` — apply migrations to the configured database.
+   - `athlete-ledger db sql [--dialect oracle|sqlite]` — print offline DDL to stdout.
+   - `athlete-ledger db check` — connect, print backend, server version, and current Alembic
+     revision; never print credentials or row contents. Non-zero exit on failure.
+   Keep `athlete-ledger --version`.
+10. **Tests** (SQLite only; no Oracle in tests): settings validation (defaults, Oracle selection,
+    conflicting/missing values, secrets absent from `repr`), Oracle engine factory builds the right
+    `connect_args` without connecting, migration upgrade/downgrade on a temporary SQLite file,
+    model round-trip including `JSONDocument` and `UTCDateTime`, composite keys rejecting
+    duplicates, offline Oracle DDL contains the tables and the reader grants, `schema.sql` up to date.
+11. **Docs**: README section "Database" (SQLite quick start; ADB with wallet: bootstrap, env vars,
+    `db upgrade`, `db check`); `.env.example` updated with the new variable names (empty values).
+
+Acceptance: local checks pass; `athlete-ledger db upgrade` and `db check` work on SQLite; the PR
+lists the JSON type decision and anything the maintainer must verify on ADB. The maintainer then
+runs the bootstrap, `db upgrade`, and `db check` against ADB before Phase 1b starts.
+
+## Domain notes for Phase 1b (read before starting it)
 
 Garmin's SDK is a thin `requests` wrapper returning raw JSON. The `core` access layer must add:
 

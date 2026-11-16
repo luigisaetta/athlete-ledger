@@ -58,9 +58,8 @@ that every model, region, or tool combination is supported.
 
 Verification gap for Phase 4: current setup instructions require a Generative AI project, and the
 example passes a project OCID through the client's `project` argument. The planned environment
-variables do not yet include a project setting. Confirm the required project configuration with
-the maintainer before implementing settings; no configuration or architecture change is made
-here. Credentials, regional availability, and real requests have not been tested.
+variables now reserve `OCI_GENAI_PROJECT_ID`. Confirm SDK/project configuration before implementing
+the agent in Phase 4. Credentials, regional availability, and real requests have not been tested.
 
 ## OCI compatible endpoints and tools
 
@@ -114,3 +113,54 @@ in `environment.yml`; uv owns the workspace dependency lockfile. Export
 explicitly. Sync all workspace members with `--inexact` so Conda bootstrap packages are preserved.
 The `--active` option alone does not select this Conda environment. Shared local pre-commit hooks
 use the installed environment tools instead of creating separate hook environments.
+
+## Ledger storage: Oracle JSON and mTLS (Phase 1a)
+
+Official sources:
+
+- [SQLAlchemy 2.0 Oracle dialect](https://docs.sqlalchemy.org/en/20/dialects/oracle.html)
+- [python-oracledb JSON support](https://python-oracledb.readthedocs.io/en/latest/user_guide/json_data_type.html)
+- [Oracle IS JSON condition](https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/is-json-condition.html)
+- [python-oracledb ADB connections](https://python-oracledb.readthedocs.io/en/latest/user_guide/connection_handling.html#connecting-to-autonomous-database)
+- [Alembic offline migrations](https://alembic.sqlalchemy.org/en/latest/offline.html)
+- [Oracle CREATE USER](https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/CREATE-USER.html)
+
+Decision: `JSONDocument` uses text on SQLite and CLOB on Oracle, with named Oracle-only `IS JSON`
+constraints on `raw_response.params` and `raw_response.payload`. `None` means SQL NULL; documents
+must be dicts or lists. The driver supports native JSON, but that alone does not supply a
+SQLAlchemy type or DDL compiler. The project's mandated SQLAlchemy 2.0 series is retained.
+
+Evidence collected locally against locked SQLAlchemy **2.0.57** and python-oracledb **4.0.2**:
+
+1. `hasattr(sqlalchemy.dialects.oracle, "JSON")` is false.
+2. The Oracle type compiler has no `visit_JSON` method.
+3. Compiling `CreateTable(Table("json_probe", MetaData(), Column("payload", JSON())))` with
+   `oracle.dialect()` raises `CompileError`: the compiler cannot render type JSON.
+4. The fallback generates `params CLOB`, `payload CLOB` and their `IS JSON` constraints in
+   [the committed offline DDL](../../sql/oracle/schema.sql). SQLite migrations and document
+   round-trips pass. The compiler probe and snapshot comparison are regression tests in
+   `packages/core/tests/test_store.py`; run `pytest packages/core/tests/test_store.py` to reproduce.
+
+Oracle documents `IS JSON` checks for CLOB columns. This supports the fallback design; it is
+not evidence of a successful ADB execution. The custom result processor accepts textual JSON
+and already-decoded documents to accommodate driver conversion. ADB must still verify that
+behavior, large CLOB binding/fetching, Unicode, NULL and malformed document handling.
+
+The documented thin-mode ADB connection supplies `user`, `password`, `dsn`, `config_dir`,
+`wallet_location`, and `wallet_password`. The engine factory passes these explicitly, hides SQL
+parameters, and never opens a connection at import time. Tests capture the connection arguments
+without connecting. The wallet directory is shared by the two directory arguments.
+
+Alembic's offline API renders the initial migration without credentials. Offline generation
+suppresses implicit INSERT RETURNING so the revision insert does not require an output bind in
+SQLcl; online migrations retain normal dialect behavior. Tests compare the generated script
+byte-for-byte with the snapshot. Grants cover all six ledger tables and `alembic_version`;
+downgrade revokes them before dropping tables. Migrations are frozen snapshots generated from
+models, with a SQLite metadata-parity test guarding drift.
+
+Unverified on ADB: bootstrap password prompts and policy, `DATA` quota, identity generation,
+CLOB/JSON and UTC behavior, repeated upgrades, schema version reporting, and least-privilege
+reader grants. Follow the README's Database checklist on the maintainer's own machine before
+Phase 1b. Oracle DDL is not transactionally rolled back; inspect partially applied migrations
+before retrying. The bootstrap preserves existing users' passwords and does not remove any
+pre-existing grants.
