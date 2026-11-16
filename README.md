@@ -192,8 +192,8 @@ and existing databases reach `0002_activity_training_metrics`; no separate insta
 needed. This revision adds 19 nullable activity training metric columns, without changing existing
 values or reader grants. The existing table-level SELECT grant covers the new columns. They stay
 NULL immediately after the schema upgrade. Run `sync rebuild` to populate them from saved raw
-responses using the current mapping; new downloads also fill them during normal sync. The existing
-MCP tools do not expose these new metrics yet (part 3).
+responses using the current mapping; new downloads also fill them during normal sync. The MCP activity tools
+expose them with the units and plain-sum semantics documented below.
 
 Generate the reviewable Oracle schema from Alembic without connecting:
 
@@ -396,6 +396,35 @@ unavailable; zero remains valid. Totals skip nulls and report missing counts for
 metric. An empty/all-null sum is null. Weighted HR excludes activities missing either HR or
 duration and is null when the eligible total duration is zero. Unknown sport groups use
 `unknown`; actual sport fields remain null when unknown.
+
+`list_activities` additionally returns these stored activity training metrics:
+
+| Field | Units and precision |
+|---|---|
+| `moving_duration_min`, `avg_speed_kmh` | Minutes (1 decimal); km/h from m/s × 3.6 (1 decimal) |
+| `max_hr_bpm`, `elevation_gain_m`, `elevation_loss_m` | Beats/minute and metres, all 1 decimal |
+| `training.aerobic_effect`, `training.anaerobic_effect` | Provider per-activity effects on 0–5, 1 decimal |
+| `training.effect_label`, `training.load` | Provider label as stored; provider load units, 1 decimal |
+| `training.stress_score`, `training.intensity_factor`, `training.normalized_power_w` | TSS points (1 decimal), dimensionless IF ratio (2), watts (0) |
+| `intensity_minutes.moderate`, `intensity_minutes.vigorous` | Separate integer minutes |
+| `hr_zone_min.zone_1` through `zone_5` | Minutes in each heart-rate zone, 1 decimal |
+
+`activity_totals` adds the following to **every group and `overall`**: `training_load`
+(provider load units, 1 decimal), `training_stress_score` (TSS points, 1), `moving_duration_h`
+(hours, 2), `elevation_gain_m` (metres, 1), separate integer sums in
+`intensity_minutes.moderate`/`vigorous`, and `hr_zone_h.zone_1` through `zone_5` (hours, 2).
+Sums skip nulls and are converted/rounded **after** summation. Empty/all-null sums stay null;
+measured zero remains zero. The `missing` object adds activity counts for `training_load`,
+`training_stress_score`, `moving_duration`, `elevation_gain` and `hr_zones`; an activity lacks
+zones only when all five stored zone times are null. A partially populated or zero-valued zone
+set is not counted as missing zones.
+
+The new nested objects are always present, with null members when data is missing. Names retain
+the same opt-in behavior. Training effect, labels and load are the provider's own per-activity
+values. TSS, IF and normalized power are available mostly for activities recorded with a power
+meter. These data are exposed and, where specified, **summed without interpretation**: there
+are no effect/IF averages, label interpretations, derived load scores or weighted combinations
+of intensity minutes. The existing duration-weighted average HR keeps its previous meaning.
 
 Wellness states distinguish `not_downloaded` (outside coverage), `no_record` (downloaded but no
 normalized row) and `ok` (row exists; individual metrics may be null). `areas` defaults to all

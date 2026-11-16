@@ -101,14 +101,21 @@ def create_server(
     @server.tool(
         title="Activity summaries",
         description=dedent("""\
-        List activities in an inclusive ISO local-date range, ordered by local start
-        time then activity ID. Choose exact sport values from ledger_status; null
-        selects every sport. Return total_matching, truncated and range-clipped
-        download coverage including missing request edges. Limit is 1–200 (default
-        50), with no offset pagination. Times are provider-local wall time without
-        a timezone; distance is km (2 decimals), duration minutes (1), average HR
-        beats/minute (1), and calories kcal. Null means unavailable; zero is valid.
-        Activity names are absent unless explicitly enabled on the server.
+        List activities by inclusive ISO local dates, ordered by local start then ID.
+        Sport values come from ledger_status; null selects all. Limit 1–200 (default
+        50), with total_matching, truncated and clipped coverage. Times are local wall
+        time without a timezone. distance_km is km (2 decimals), duration_min is minutes (1),
+        avg_hr_bpm is beats/minute (1), calories_kcal is kcal. moving_duration_min is
+        minutes (1), avg_speed_kmh
+        is km/h (m/s × 3.6, 1), max_hr_bpm is beats/minute (1), and
+        elevation_gain_m/elevation_loss_m are metres (1).
+        training contains provider-owned per-activity aerobic_effect/anaerobic_effect
+        (0–5, 1), effect_label as stored, load (provider units, 1), stress_score (TSS, 1),
+        intensity_factor (ratio, 2) and normalized_power_w (watts, 0). TSS/IF/normalized
+        power are mostly available for power-meter activities. intensity_minutes has
+        separate moderate/vigorous integers; hr_zone_min has zone_1–zone_5 minutes (1).
+        No scores or label interpretations are derived. Null means unavailable; zero
+        is valid; nested objects are always present. Names require server opt-in.
         """).strip(),
         annotations=annotations,
         structured_output=True,
@@ -157,6 +164,8 @@ def create_server(
         (2 decimals), durations minutes (1), average HR beats/minute (1), calories kcal.
         Null means unavailable, zero is valid. Names are absent unless explicitly enabled.
         Coverage is clipped to the requested range and includes uncovered request edges.
+        New provider training fields use the explicit nested units in the output schema;
+        missing metrics leave null members inside always-present nested objects.
 
         Args:
             start: Inclusive first ISO calendar date, YYYY-MM-DD.
@@ -181,14 +190,19 @@ def create_server(
     @server.tool(
         title="Activity totals",
         description=dedent("""\
-        Return grouped and overall activity totals for inclusive ISO local dates.
-        Group by ISO week (YYYY-Www with Monday date), calendar month (YYYY-MM), or
-        sport (unknown for a null type), ordered by group key. Sums skip nulls;
-        empty/all-null sums are null. Report counts missing distance, duration,
-        calories and HR separately. Weight average HR by duration only over rows
-        having both inputs; zero eligible duration gives null. Units are km
-        (2 decimals), hours (2), beats/minute (1), and kcal. Zero is valid. Include
-        range-clipped download coverage, including missing request edges.
+        Return grouped/overall activity totals for inclusive ISO local dates. Group by
+        ISO week (YYYY-Www and Monday), month (YYYY-MM), or sport (unknown for null),
+        in key order. Return activity_count, distance_km (km, 2), duration_h (hours, 2),
+        calories_kcal (kcal) and duration-weighted avg_hr_bpm (beats/minute, 1).
+        Training and intensity values are plain sums only:
+        training_load (provider units, 1), training_stress_score (TSS points, 1),
+        moving_duration_h (hours, 2), elevation_gain_m (metres, 1), intensity_minutes with
+        separate moderate/vigorous integer sums, and hr_zone_h zone_1–zone_5 hours (2).
+        Provider-owned per-activity load is summed without interpretation; TSS is
+        mostly available for power-meter activities. No effect/IF averages or derived
+        scores. Nulls are skipped; empty/all-null sums are null. Zero is valid and
+        nested objects are always present. Missing counts include load, TSS, moving
+        duration, elevation gain and all-five-null HR zones. Return clipped coverage.
         """).strip(),
         annotations=annotations,
         structured_output=True,
@@ -228,6 +242,7 @@ def create_server(
         report unavailable distance, duration, calories and HR separately. HR is weighted
         by duration only over activities having both values; zero total weight gives null.
         Distance is km (2 decimals), duration hours (2), HR beats/minute (1), calories kcal.
+        Training metrics are plain sums with missing counts, never effects/IF averages.
 
         Args:
             start: Inclusive first ISO calendar date, YYYY-MM-DD.

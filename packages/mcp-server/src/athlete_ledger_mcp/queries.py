@@ -26,13 +26,17 @@ from athlete_ledger_mcp.results import (
     DatasetStatus,
     DateInterval,
     DownloadCoverage,
+    HeartRateZoneHours,
+    HeartRateZoneMinutes,
     HRVValues,
+    IntensityMinutes,
     LedgerStatus,
     MissingValues,
     NamedActivityData,
     SleepValues,
     SportCount,
     StressValues,
+    TrainingMetrics,
     WellnessArea,
     WellnessDay,
 )
@@ -210,6 +214,43 @@ def ledger_status(engine: Engine, today: date) -> LedgerStatus:
     )
 
 
+def activity_training_values(row: Any) -> dict[str, Any]:
+    """Convert only the selected stored training columns into the additive list fields.
+
+    Args:
+        row: Selected activity columns, with nullable metrics in provider-native units.
+
+    Returns:
+        Unit-converted scalar fields and always-present nested result objects.
+    """
+    return {
+        "moving_duration_min": scaled(row.moving_duration_s, 60),
+        "avg_speed_kmh": scaled(row.avg_speed_mps * 3.6) if row.avg_speed_mps is not None else None,
+        "max_hr_bpm": scaled(row.max_hr_bpm),
+        "elevation_gain_m": scaled(row.elevation_gain_m),
+        "elevation_loss_m": scaled(row.elevation_loss_m),
+        "training": TrainingMetrics(
+            aerobic_effect=scaled(row.aerobic_training_effect),
+            anaerobic_effect=scaled(row.anaerobic_training_effect),
+            effect_label=row.training_effect_label,
+            load=scaled(row.training_load),
+            stress_score=scaled(row.training_stress_score),
+            intensity_factor=scaled(row.intensity_factor, digits=2),
+            normalized_power_w=scaled(row.normalized_power_w, digits=0),
+        ),
+        "intensity_minutes": IntensityMinutes(
+            moderate=row.moderate_intensity_min,
+            vigorous=row.vigorous_intensity_min,
+        ),
+        "hr_zone_min": HeartRateZoneMinutes(
+            **{
+                f"zone_{zone}": scaled(getattr(row, f"hr_zone_{zone}_s"), 60)
+                for zone in range(1, 6)
+            }
+        ),
+    }
+
+
 def list_activities(
     engine: Engine, start: date, end: date, sport: str | None, limit: int, names: bool
 ) -> ActivityList:
@@ -237,6 +278,25 @@ def list_activities(
         Activity.duration_s,
         Activity.avg_hr_bpm,
         Activity.calories_kcal,
+        Activity.moving_duration_s,
+        Activity.avg_speed_mps,
+        Activity.max_hr_bpm,
+        Activity.elevation_gain_m,
+        Activity.elevation_loss_m,
+        Activity.aerobic_training_effect,
+        Activity.anaerobic_training_effect,
+        Activity.training_effect_label,
+        Activity.training_load,
+        Activity.training_stress_score,
+        Activity.intensity_factor,
+        Activity.normalized_power_w,
+        Activity.moderate_intensity_min,
+        Activity.vigorous_intensity_min,
+        Activity.hr_zone_1_s,
+        Activity.hr_zone_2_s,
+        Activity.hr_zone_3_s,
+        Activity.hr_zone_4_s,
+        Activity.hr_zone_5_s,
     ]
     if names:
         columns.append(Activity.activity_name)
@@ -260,6 +320,7 @@ def list_activities(
                 duration_min=scaled(row.duration_s, 60),
                 avg_hr_bpm=scaled(row.avg_hr_bpm),
                 calories_kcal=row.calories_kcal,
+                **activity_training_values(row),
             )
             activities.append(
                 NamedActivityData(**values, activity_name=row.activity_name)
@@ -274,14 +335,29 @@ def list_activities(
     )
 
 
+def nullable_sum(rows: Sequence[Any], column: str) -> int | float | None:
+    """Sum a selected scalar column while preserving an empty/all-null sum as None.
+
+    Args:
+        rows: Activity rows already restricted to the requested provider/date range.
+        column: Name of a selected numeric activity column.
+
+    Returns:
+        The unrounded sum of non-null values, including valid zero, or None.
+    """
+    values = [getattr(row, column) for row in rows if getattr(row, column) is not None]
+    return sum(values) if values else None
+
+
 def aggregate(rows: Sequence[Any]) -> ActivityAggregate:
     """Sum available metrics and compute HR weighted only by eligible durations.
 
     Args:
-        rows: Selected activity rows with distance, duration, calories and average HR.
+        rows: Selected activity rows with existing metrics and the additive plain-sum columns.
 
     Returns:
-        Unit-converted totals (None when no inputs exist), weighted HR and null counts.
+        Existing totals/weighted HR, added plain sums, and per-input null counts.
+        Rounding follows summation and unit conversion; no effect/IF averages are derived.
     """
     distances = [r.distance_m for r in rows if r.distance_m is not None]
     durations = [r.duration_s for r in rows if r.duration_s is not None]
@@ -296,11 +372,34 @@ def aggregate(rows: Sequence[Any]) -> ActivityAggregate:
         avg_hr_bpm=scaled(sum(r.avg_hr_bpm * r.duration_s for r in eligible) / weight)
         if weight
         else None,
+        training_load=scaled(nullable_sum(rows, "training_load")),
+        training_stress_score=scaled(nullable_sum(rows, "training_stress_score")),
+        moving_duration_h=scaled(nullable_sum(rows, "moving_duration_s"), 3600, 2),
+        elevation_gain_m=scaled(nullable_sum(rows, "elevation_gain_m")),
+        intensity_minutes=IntensityMinutes.model_validate(
+            {
+                "moderate": nullable_sum(rows, "moderate_intensity_min"),
+                "vigorous": nullable_sum(rows, "vigorous_intensity_min"),
+            }
+        ),
+        hr_zone_h=HeartRateZoneHours(
+            **{
+                f"zone_{zone}": scaled(nullable_sum(rows, f"hr_zone_{zone}_s"), 3600, 2)
+                for zone in range(1, 6)
+            }
+        ),
         missing=MissingValues(
             distance=len(rows) - len(distances),
             duration=len(rows) - len(durations),
             calories=len(rows) - len(calories),
             avg_hr=sum(r.avg_hr_bpm is None for r in rows),
+            training_load=sum(r.training_load is None for r in rows),
+            training_stress_score=sum(r.training_stress_score is None for r in rows),
+            moving_duration=sum(r.moving_duration_s is None for r in rows),
+            elevation_gain=sum(r.elevation_gain_m is None for r in rows),
+            hr_zones=sum(
+                all(getattr(r, f"hr_zone_{zone}_s") is None for zone in range(1, 6)) for r in rows
+            ),
         ),
     )
 
@@ -329,6 +428,17 @@ def activity_totals(
                     Activity.duration_s,
                     Activity.avg_hr_bpm,
                     Activity.calories_kcal,
+                    Activity.training_load,
+                    Activity.training_stress_score,
+                    Activity.moving_duration_s,
+                    Activity.elevation_gain_m,
+                    Activity.moderate_intensity_min,
+                    Activity.vigorous_intensity_min,
+                    Activity.hr_zone_1_s,
+                    Activity.hr_zone_2_s,
+                    Activity.hr_zone_3_s,
+                    Activity.hr_zone_4_s,
+                    Activity.hr_zone_5_s,
                 )
                 .where(*activity_filter(start, end))
                 .order_by(Activity.start_time_local, Activity.activity_id)
