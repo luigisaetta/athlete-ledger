@@ -29,6 +29,10 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
+    personal_api_key: SecretStr | None = Field(
+        default=None, validation_alias="GARMIN_PERSONAL_API_KEY", repr=False
+    )
+
     db_url: str | None = Field(default=None, repr=False)
     db_user: str | None = Field(default=None, repr=False)
     db_password: SecretStr | None = None
@@ -111,7 +115,14 @@ def validation_environment_names(error: ValidationError) -> list[str]:
     Returns:
         The operation result.
     """
-    allowed = {name: f"ATHLETE_LEDGER_{name.upper()}" for name in Settings.model_fields}
+    allowed = {
+        name: (
+            "GARMIN_PERSONAL_API_KEY"
+            if name == "personal_api_key"
+            else f"ATHLETE_LEDGER_{name.upper()}"
+        )
+        for name in Settings.model_fields
+    }
     fields: set[str] = set()
     for detail in error.errors(include_input=False, include_url=False):
         location = detail["loc"]

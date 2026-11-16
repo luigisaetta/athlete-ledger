@@ -1,5 +1,6 @@
 [dependency-groups]
 dev = [
+    "types-requests>=2.32,<3",
     "hatchling>=1.27,<2",
     "mypy>=1.18,<2",
     "pre-commit>=4.3,<5",
@@ -37,3 +38,7 @@ files = [
 [tool.pytest.ini_options]
 testpaths = ["packages/core/tests", "packages/mcp-server/tests", "packages/agent/tests"]
 addopts = "--import-mode=importlib"
+
+[[tool.mypy.overrides]]
+module = ["garmin_personal_api", "garmin_personal_api.*"]
+ignore_missing_imports = true
