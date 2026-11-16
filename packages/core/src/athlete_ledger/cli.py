@@ -19,6 +19,8 @@ from athlete_ledger.db import create_db_engine
 from athlete_ledger.db.migrate import check_database, offline_sql, upgrade
 from athlete_ledger.errors import LedgerError, database_error_code
 from athlete_ledger.settings import Settings, validation_environment_names
+from athlete_ledger.sync_cli import add_sync_commands, run_sync
+from athlete_ledger.sync_types import ProviderError
 
 
 def run(
@@ -37,6 +39,7 @@ def run(
     parser = argparse.ArgumentParser(prog="athlete-ledger")
     parser.add_argument("--version", action="version", version=f"athlete-ledger {__version__}")
     commands = parser.add_subparsers(dest="command")
+    add_sync_commands(commands)
     db_parser = commands.add_parser("db", help="Manage the ledger database")
     db_commands = db_parser.add_subparsers(dest="db_command", required=True)
     db_commands.add_parser("upgrade", help="Apply migrations to the configured database")
@@ -48,17 +51,23 @@ def run(
         print(f"athlete-ledger {__version__}")
         return 0
     try:
-        if args.db_command == "sql":
+        if args.command == "db" and args.db_command == "sql":
             print(offline_sql(args.dialect), end="")
             return 0
         if show_banner:
-            banner("Database upgrade" if args.db_command == "upgrade" else "Database check")
+            banner(
+                "Summary sync"
+                if args.command == "sync"
+                else ("Database upgrade" if args.db_command == "upgrade" else "Database check")
+            )
         settings = Settings()
         if require_oracle and settings.backend != "oracle":
             print("Invalid database settings: ATHLETE_LEDGER_DB_DSN.", file=sys.stderr)
             return 1
         engine = create_db_engine(settings)
         try:
+            if args.command == "sync":
+                return run_sync(args, engine, settings)
             if args.db_command == "upgrade":
                 upgrade(engine)
                 ok("Database migrations applied.")
@@ -77,6 +86,9 @@ def run(
         names = validation_environment_names(error)
         detail = ": " + ", ".join(names) if names else ""
         print(f"Invalid database settings{detail}.", file=sys.stderr)
+        return 1
+    except ProviderError as error:
+        print(str(error), file=sys.stderr)
         return 1
     except OSError as error:
         print(f"Database operation failed: {type(error).__name__}.", file=sys.stderr)

@@ -1,0 +1,135 @@
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Parse sync commands and display only safe counters and state.
+"""  # noqa: D205, D212
+
+import argparse
+import logging
+import sys
+from datetime import date
+from typing import Any
+
+from sqlalchemy import Engine
+
+from athlete_ledger.console import info, ok
+from athlete_ledger.providers.garmin_connect import PersonalProvider
+from athlete_ledger.settings import Settings
+from athlete_ledger.sync import sync_status, synchronize
+from athlete_ledger.sync_types import DATASETS
+
+
+def _date(value: str) -> date:
+    """Parse an ISO date without echoing invalid argument values.
+
+    Args:
+        value: Calendar date argument.
+
+    Returns:
+        A calendar date.
+
+    Raises:
+        argparse.ArgumentTypeError: If the supplied format is invalid.
+    """
+    try:
+        result = date.fromisoformat(value)
+        if result.isoformat() != value:
+            raise ValueError
+        return result
+    except ValueError:
+        raise argparse.ArgumentTypeError("Use a calendar date in YYYY-MM-DD format.") from None
+
+
+def _dataset(value: str) -> str:
+    """Validate a dataset without echoing an invalid argument value.
+
+    Args:
+        value: Requested dataset.
+
+    Returns:
+        A supported dataset name.
+
+    Raises:
+        argparse.ArgumentTypeError: If the value is not a supported dataset.
+    """
+    if value not in DATASETS:
+        raise argparse.ArgumentTypeError("Choose activities, sleep, hrv or stress.")
+    return value
+
+
+def add_sync_commands(commands: Any) -> None:
+    """Register the sync command family without loading settings or credentials.
+
+    Args:
+        commands: Root argparse subparser collection.
+    """
+    parser = commands.add_parser("sync", help="Synchronize summary data")
+    subcommands = parser.add_subparsers(dest="sync_command", required=True)
+    backfill = subcommands.add_parser("backfill", help="Fetch an inclusive historical range")
+    backfill.add_argument("--since", type=_date, required=True)
+    backfill.add_argument("--until", type=_date)
+    incremental = subcommands.add_parser("run", help="Refresh the last three synced days onward")
+    for command in (backfill, incremental):
+        command.add_argument("--dataset", nargs="+", action="extend", type=_dataset, metavar="NAME")
+    subcommands.add_parser("status", help="Show progress without accessing the provider")
+
+
+def run_sync(args: argparse.Namespace, engine: Engine, settings: Settings) -> int:
+    """Run selected datasets and report counts, dates and safe errors only.
+
+    Args:
+        args: Parsed command options.
+        engine: Configured ledger database.
+        settings: Configuration containing an optional secret API key.
+
+    Returns:
+        Zero only if every requested dataset completed.
+    """
+    if args.sync_command == "status":
+        for state in sync_status(engine):
+            stamp = state.last_run_at.isoformat() if state.last_run_at else "-"
+            info(
+                f"{state.dataset}: last_synced_date={state.last_synced_date or '-'} "
+                f"last_run_at={stamp} last_status={state.last_status or '-'}"
+            )
+        return 0
+    today = date.today()
+    since = args.since if args.sync_command == "backfill" else None
+    until = (args.until or today) if args.sync_command == "backfill" else today
+    if until > today or (since is not None and since > until):
+        print("Invalid sync date range; use ordered dates no later than today.", file=sys.stderr)
+        return 1
+    # SDK warnings can contain credential-cache paths; the CLI uses its own safe diagnostics.
+    logger = logging.getLogger("garmin_personal_api")
+    logger.setLevel(logging.WARNING)
+    logger.handlers = [logging.NullHandler()]
+    logger.propagate = False
+    provider = PersonalProvider(settings.personal_api_key)
+    failed = False
+    try:
+        results = synchronize(
+            engine,
+            provider,
+            args.dataset or DATASETS,
+            since=since,
+            until=until,
+            today=today,
+        )
+        for result in results:
+            c = result.counts
+            message = (
+                f"{result.dataset}: chunks={c.chunks} requests={c.requests} "
+                f"raw_stored={c.raw_stored} raw_unchanged={c.raw_unchanged} "
+                f"rows_inserted={c.inserted} rows_updated={c.updated} "
+                f"rows_unchanged={c.unchanged} placeholders_skipped={c.placeholders}"
+            )
+            if result.error:
+                failed = True
+                info(message)
+                print(result.error, file=sys.stderr)
+            else:
+                ok(message)
+    finally:
+        provider.close()
+    return 1 if failed else 0
