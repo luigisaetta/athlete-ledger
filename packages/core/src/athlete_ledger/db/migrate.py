@@ -11,7 +11,7 @@ from alembic.runtime.migration import MigrationContext
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
-from athlete_ledger.errors import DatabaseError
+from athlete_ledger.errors import DatabaseError, database_error_code
 
 DialectName = Literal["oracle", "sqlite"]
 
@@ -30,9 +30,10 @@ def upgrade(engine: Engine, revision: str = "head") -> None:
             config = migration_config()
             config.attributes["connection"] = connection
             command.upgrade(config, revision)
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
         raise DatabaseError(
-            "Database upgrade failed; check connectivity and schema privileges."
+            "Database upgrade failed; check connectivity and schema privileges.",
+            code=database_error_code(error),
         ) from None
 
 
@@ -43,8 +44,8 @@ def downgrade(engine: Engine, revision: str = "base") -> None:
             config = migration_config()
             config.attributes["connection"] = connection
             command.downgrade(config, revision)
-    except SQLAlchemyError:
-        raise DatabaseError("Database downgrade failed.") from None
+    except SQLAlchemyError as error:
+        raise DatabaseError("Database downgrade failed.", code=database_error_code(error)) from None
 
 
 def offline_sql(dialect: DialectName = "oracle") -> str:
@@ -73,7 +74,8 @@ def check_database(engine: Engine) -> DatabaseStatus:
             revision = MigrationContext.configure(connection).get_current_revision()
             version = ".".join(str(part) for part in (engine.dialect.server_version_info or ()))
             return DatabaseStatus(engine.dialect.name, version or "unknown", revision)
-    except SQLAlchemyError:
+    except SQLAlchemyError as error:
         raise DatabaseError(
-            "Database check failed; check connectivity and schema privileges."
+            "Database check failed; check connectivity and schema privileges.",
+            code=database_error_code(error),
         ) from None

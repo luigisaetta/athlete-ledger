@@ -8,6 +8,7 @@ import sqlalchemy
 from athlete_ledger.db import create_db_engine
 from athlete_ledger.errors import ConfigurationError
 from athlete_ledger.settings import Settings
+from pydantic import SecretStr
 
 
 def test_sqlite_parent_and_foreign_keys(tmp_path: Path) -> None:
@@ -60,3 +61,31 @@ def test_thick_mode_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     with pytest.raises(ConfigurationError, match="thin mode"):
         create_db_engine(settings)
+
+
+@pytest.mark.parametrize(
+    "updates",
+    [
+        {"db_user": None},
+        {"db_user": " "},
+        {"db_password": None},
+        {"db_password": SecretStr("")},
+        {"db_wallet_dir": None},
+        {"db_wallet_password": None},
+        {"db_wallet_password": SecretStr("")},
+    ],
+)
+def test_invalid_constructed_settings_raise_explicit_error(updates: dict[str, object]) -> None:
+    # Bypass validation to prove the engine guard remains effective even with python -O.
+    settings = Settings.model_construct(
+        db_dsn="synthetic-private-alias",
+        db_user="synthetic-private-user",
+        db_password=SecretStr("synthetic-private-password"),
+        db_wallet_dir=Path("/synthetic/private/wallet"),
+        db_wallet_password=SecretStr("synthetic-private-wallet-password"),
+    ).model_copy(update=updates)
+    with patch("athlete_ledger.db.create_engine") as factory:
+        with pytest.raises(ConfigurationError) as error:
+            create_db_engine(settings)
+    factory.assert_not_called()
+    assert str(error.value) == "Oracle requires complete mTLS connection settings."

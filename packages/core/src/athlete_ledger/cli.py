@@ -4,14 +4,15 @@ import argparse
 import sys
 from collections.abc import Sequence
 
+import oracledb
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
 from athlete_ledger import __version__
 from athlete_ledger.db import create_db_engine
 from athlete_ledger.db.migrate import check_database, offline_sql, upgrade
-from athlete_ledger.errors import LedgerError
-from athlete_ledger.settings import Settings
+from athlete_ledger.errors import LedgerError, database_error_code
+from athlete_ledger.settings import Settings, validation_environment_names
 
 
 def run(argv: Sequence[str] | None = None) -> int:
@@ -45,17 +46,21 @@ def run(argv: Sequence[str] | None = None) -> int:
                 print(f"Alembic revision: {status.revision or 'unversioned'}")
         finally:
             engine.dispose()
-    except ValidationError:
-        print(
-            "Invalid database settings; check the documented environment variables.",
-            file=sys.stderr,
-        )
+    except ValidationError as error:
+        names = validation_environment_names(error)
+        detail = ": " + ", ".join(names) if names else ""
+        print(f"Invalid database settings{detail}.", file=sys.stderr)
         return 1
-    except (LedgerError, SQLAlchemyError, OSError, ValueError):
-        # Driver and validation diagnostics may contain credentials or bound data.
-        print(
-            "Database operation failed; check configuration and schema privileges.", file=sys.stderr
-        )
+    except OSError as error:
+        print(f"Database operation failed: {type(error).__name__}.", file=sys.stderr)
+        return 1
+    except (LedgerError, SQLAlchemyError, oracledb.Error) as error:
+        code = database_error_code(error)
+        detail = f": {code}" if code else ""
+        print(f"Database operation failed{detail}.", file=sys.stderr)
+        return 1
+    except ValueError:
+        print("Database operation failed.", file=sys.stderr)
         return 1
     return 0
 

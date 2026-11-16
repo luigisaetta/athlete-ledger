@@ -150,9 +150,11 @@ Configure the following privately in your environment or local `.env`, then run 
 Leave `ATHLETE_LEDGER_DB_URL` unset for Oracle. The engine uses `oracle+oracledb` in thin mode;
 the wallet directory is passed as both `config_dir` and `wallet_location`. No Oracle Client
 installation or `init_oracle_client()` call is needed. `db check` prints only backend, server
-version and Alembic revision; configuration and driver failures return a nonzero exit status
-without printing credentials or row contents. Successful Phase 1a upgrades report
-`0001_ledger_store`; an empty database reports `unversioned`.
+version and Alembic revision. Failures return a nonzero exit status: settings diagnostics list only
+the missing or invalid environment variable names; database diagnostics show only an available
+`ORA-nnnnn` or `DPY-nnnn` code; filesystem diagnostics show only the `OSError` type. Original error
+messages, settings values, paths, SQL and bound parameters are not printed. Successful Phase 1a
+upgrades report `0001_ledger_store`; an empty database reports `unversioned`.
 
 Generate the reviewable Oracle schema from Alembic without connecting:
 

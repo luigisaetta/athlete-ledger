@@ -26,9 +26,16 @@ def create_db_engine(settings: Settings) -> Engine:
     if settings.backend == "oracle":
         if not oracledb.is_thin_mode():
             raise ConfigurationError("Oracle requires python-oracledb thin mode.")
-        assert settings.db_password is not None
-        assert settings.db_wallet_password is not None
-        assert settings.db_wallet_dir is not None
+        if (
+            not settings.db_user
+            or not settings.db_user.strip()
+            or settings.db_password is None
+            or not settings.db_password.get_secret_value()
+            or settings.db_wallet_password is None
+            or not settings.db_wallet_password.get_secret_value()
+            or settings.db_wallet_dir is None
+        ):
+            raise ConfigurationError("Oracle requires complete mTLS connection settings.")
         return create_engine(
             URL.create("oracle+oracledb"),
             connect_args={

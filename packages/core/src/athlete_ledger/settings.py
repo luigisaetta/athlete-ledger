@@ -3,10 +3,12 @@
 from pathlib import Path
 from typing import Self
 
-from pydantic import Field, SecretStr, model_validator
+from pydantic import Field, SecretStr, ValidationError, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
+
+from athlete_ledger.errors import SettingsIssue
 
 DEFAULT_DB_URL = "sqlite:///./data/athlete_ledger.db"
 
@@ -46,28 +48,49 @@ class Settings(BaseSettings):
         """Reject incomplete Oracle settings and incompatible selectors."""
         if self.db_dsn:
             if self.db_url:
-                raise ValueError("Set only one of ATHLETE_LEDGER_DB_URL and ATHLETE_LEDGER_DB_DSN.")
-            if not all(
-                (
-                    self.db_user and self.db_user.strip(),
-                    self.db_password and self.db_password.get_secret_value(),
-                    self.db_wallet_dir,
-                    self.db_wallet_password and self.db_wallet_password.get_secret_value(),
+                raise SettingsIssue(
+                    "Set only one of ATHLETE_LEDGER_DB_URL and ATHLETE_LEDGER_DB_DSN.",
+                    ("db_url", "db_dsn"),
                 )
-            ):
-                raise ValueError(
-                    "Oracle requires user, password, wallet directory and wallet password."
+            required = {
+                "db_user": self.db_user and self.db_user.strip(),
+                "db_password": self.db_password and self.db_password.get_secret_value(),
+                "db_wallet_dir": self.db_wallet_dir,
+                "db_wallet_password": (
+                    self.db_wallet_password and self.db_wallet_password.get_secret_value()
+                ),
+            }
+            missing = tuple(name for name, value in required.items() if not value)
+            if missing:
+                raise SettingsIssue(
+                    "Oracle requires user, password, wallet directory and wallet password.", missing
                 )
         else:
             try:
                 url = make_url(self.sqlite_url)
             except (ArgumentError, ValueError):
-                raise ValueError("Invalid SQLite database URL.") from None
+                raise SettingsIssue("Invalid SQLite database URL.", ("db_url",)) from None
             if (
                 url.drivername not in {"sqlite", "sqlite+pysqlite"}
                 or url.username
                 or url.password
                 or url.host
             ):
-                raise ValueError("DB_URL must be a SQLite URL; configure Oracle with DB_DSN.")
+                raise SettingsIssue(
+                    "DB_URL must be a SQLite URL; configure Oracle with DB_DSN.", ("db_url",)
+                )
         return self
+
+
+def validation_environment_names(error: ValidationError) -> list[str]:
+    """Return allowlisted environment names without rendering messages or inputs."""
+    allowed = {name: f"ATHLETE_LEDGER_{name.upper()}" for name in Settings.model_fields}
+    fields: set[str] = set()
+    for detail in error.errors(include_input=False, include_url=False):
+        location = detail["loc"]
+        if location and isinstance(location[0], str) and location[0] in allowed:
+            fields.add(location[0])
+        issue = detail.get("ctx", {}).get("error")
+        if isinstance(issue, SettingsIssue):
+            fields.update(name for name in issue.fields if name in allowed)
+    return sorted(allowed[name] for name in fields)
