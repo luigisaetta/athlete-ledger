@@ -56,6 +56,7 @@ description instead of guessing. Do not change architecture decisions on your ow
 athlete-ledger/
 ├── pyproject.toml          uv workspace root (dev tooling config only)
 ├── uv.lock
+├── environment.yml         local Conda environment `athlete-ledger`
 ├── packages/
 │   ├── core/               distribution `athlete-ledger`, import `athlete_ledger`
 │   │   └── src/athlete_ledger/
@@ -66,7 +67,7 @@ athlete-ledger/
 ├── ui/                     Next.js app (Phase 5; do not create before)
 ├── docs/reference/         summaries + links of external specs (see Phase 0)
 ├── .env.example            variable names only, no values
-└── .github/workflows/ci.yml
+└── .github/workflows/ci.yml # deferred; see the GitHub Actions rule below
 ```
 
 Use the `src/` layout. **Never create a top-level directory or module named `mcp`**: it would
@@ -75,6 +76,12 @@ shadow the MCP SDK package on import.
 ## Stack
 
 - Python **3.12+** (required by Garmin's SDK), `uv` workspace, `hatchling` build backend.
+- Local development uses the Conda environment **`athlete-ledger`**, defined in `environment.yml`
+  with Python 3.12. Install all project packages and development tools there. After activation,
+  export `UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"`; do not create a separate `.venv`. Use
+  `uv sync --all-packages --inexact --locked` to preserve Conda-managed bootstrap packages and
+  `uv run --all-packages --no-sync` for commands after syncing. Install pre-commit hooks with the
+  environment active; the hooks use its installed tools without creating additional environments.
 - Lint/format: `ruff`. Types: `mypy --strict` on `src/`. Tests: `pytest`.
 - `pre-commit` running ruff and basic hygiene hooks.
 - Core: SQLAlchemy 2.0 (typed ORM, `Mapped[...]`), Alembic, `python-oracledb` (thin mode), Pydantic v2,
@@ -103,7 +110,7 @@ and any open questions.
 
 | Phase | Scope | Done when |
 |---|---|---|
-| **0. Foundation (current)** | Workspace, tooling, CI, `docs/reference/`, `.env.example` | CI green on an empty skeleton |
+| **0. Foundation (current)** | Workspace, tooling, local checks, `docs/reference/`, `.env.example` | All acceptance checks pass locally on an empty skeleton |
 | 1. Ledger and sync | `core`: Garmin access layer, SQLAlchemy schema, Alembic, `sync backfill --since` and incremental `sync` | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
 | 2. MCP over stdio | Read-only tools on the DB | Works with MCP Inspector and a desktop client |
 | 3. Streamable HTTP | Stateless 2026-07-28 transport + 2025 compatibility | Conformance tests pass |
@@ -121,8 +128,10 @@ and any open questions.
    `athlete-ledger` (core CLI), `athlete-ledger-mcp`, `athlete-ledger-agent`.
 4. `.pre-commit-config.yaml` (ruff lint + format, end-of-file, trailing whitespace, check-yaml,
    detect-private-key).
-5. `.github/workflows/ci.yml`: on push and PR, `uv sync --locked`, ruff check, ruff format --check,
-   mypy, pytest, on Python 3.12 and 3.13.
+5. **GitHub Actions is deferred and is not required to complete Phase 0.** Do not create or enable
+   `.github/workflows/ci.yml` until the maintainer confirms that the repository has been configured
+   to accept issues and PRs. Only after that confirmation, introduce CI on push and PR with
+   `uv sync --locked`, ruff check, ruff format --check, mypy, and pytest on Python 3.12 and 3.13.
 6. `.env.example` with the variable names listed above, values empty.
 7. `docs/reference/README.md`: for each external spec, the official link plus a short summary
    **in your own words** of the rules that matter to this project (do not copy documentation text):
@@ -131,8 +140,20 @@ and any open questions.
    Flag anything you could not verify.
 8. Update the README "Development" section with the exact setup commands.
 
-Acceptance: `uv sync && uv run ruff check . && uv run ruff format --check . && uv run mypy && uv run pytest`
-passes locally and in CI.
+Acceptance, with `conda activate athlete-ledger` and
+`export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"`:
+
+```sh
+uv sync --all-packages --inexact --locked
+uv run --all-packages --no-sync ruff check .
+uv run --all-packages --no-sync ruff format --check .
+uv run --all-packages --no-sync mypy
+uv run --all-packages --no-sync pytest
+```
+
+All checks must pass locally. GitHub Actions remains deferred under task 5; a green CI run is not
+a Phase 0 acceptance requirement. Runtime dependencies for later phases are added when their
+features are implemented; Phase 0 packages have no runtime dependencies.
 
 ## Domain notes for Phase 1 (read before starting it)
 

@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling>=1.27,<2"]
+build-backend = "hatchling.build"
+
+[project]
+name = "athlete-ledger-agent"
+version = "0.0.1"
+description = "OCI conversation agent for the training ledger."
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = []
+
+[project.scripts]
+athlete-ledger-agent = "athlete_ledger_agent.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/athlete_ledger_agent"]

@@ -65,8 +65,46 @@ model you configure (for example OCI Generative AI in your own tenancy).
 
 ## Development
 
-Setup instructions will be added once the project skeleton is in place. The project uses Python 3.12+
-and [uv](https://docs.astral.sh/uv/). Contributors and coding agents: see [AGENTS.md](AGENTS.md).
+The project uses Python 3.12+, [Conda](https://docs.conda.io/) for the local environment, and
+[uv](https://docs.astral.sh/uv/) for the Python workspace and lockfile. From the repository root:
+
+```sh
+conda env create --file environment.yml
+conda activate athlete-ledger
+export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
+uv sync --all-packages --inexact --locked
+pre-commit install
+```
+
+If the environment already exists, start at `conda activate athlete-ledger`. Activate it and export
+`UV_PROJECT_ENVIRONMENT` in each new shell. This installs all three workspace packages and the shared
+development tools into Conda. `--inexact` preserves Conda-managed bootstrap packages. Hooks use the
+tools from this environment, so keep it active when committing. `uv.lock` pins workspace dependencies;
+`environment.yml` defines the Python and uv bootstrap. No credentials are needed for Phase 0.
+
+Run the local acceptance checks after syncing:
+
+```sh
+uv run --all-packages --no-sync ruff check .
+uv run --all-packages --no-sync ruff format --check .
+uv run --all-packages --no-sync mypy
+uv run --all-packages --no-sync pytest
+```
+
+The reserved commands currently print version `0.0.1` and exit:
+
+```sh
+athlete-ledger
+athlete-ledger-mcp
+athlete-ledger-agent
+```
+
+The skeleton contains no provider, database, MCP server, or agent implementation yet. Planned
+configuration names are listed with empty values in `.env.example`; settings loading starts in a
+later phase. API references and verification gaps are in [docs/reference/README.md](docs/reference/README.md).
+Contributors and coding agents: see [AGENTS.md](AGENTS.md).
+
+Phase 0 requires local checks only.
 
 ## Disclaimer
 
