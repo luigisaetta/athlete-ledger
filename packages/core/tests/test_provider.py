@@ -346,3 +346,15 @@ def test_cli_http_failure_never_formats_sdk_body(tmp_path, monkeypatch, capsys):
     assert "synthetic-key" not in captured.out + captured.err
     assert "synthetic.invalid" not in captured.out + captured.err
     assert client.closed and auth.closed
+
+
+def test_explicit_empty_key_is_not_treated_as_unset():
+    """Verify an explicitly supplied empty secret does not trigger default key discovery."""
+    from garmin_personal_api import GarminPersonalApiError
+
+    resolver = Mock(side_effect=GarminPersonalApiError("SYNTHETIC-PRIVATE-ERROR"))
+    instance = PersonalProvider(SecretStr(""), key_resolver=resolver)
+    with pytest.raises(ProviderError) as error:
+        list(instance.responses("sleep", START, START))
+    resolver.assert_called_once_with("")
+    assert "SYNTHETIC-PRIVATE" not in str(error.value)

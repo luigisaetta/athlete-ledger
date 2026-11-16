@@ -168,7 +168,9 @@ class PersonalProvider:
             try:
                 if self._key is None:
                     explicit = (
-                        self._configured_key.get_secret_value() if self._configured_key else None
+                        self._configured_key.get_secret_value()
+                        if self._configured_key is not None
+                        else None
                     )
                     self._key = SecretStr(self._resolver(explicit))
                 if self._auth is None:
