@@ -8,12 +8,13 @@ Description: Parse sync commands and display only safe counters and state.
 import argparse
 import logging
 import sys
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import Engine
 
 from athlete_ledger.console import info, ok
+from athlete_ledger.coverage import sync_coverage
 from athlete_ledger.providers.garmin_connect import PersonalProvider
 from athlete_ledger.settings import Settings
 from athlete_ledger.sync import sync_status, synchronize
@@ -70,7 +71,8 @@ def add_sync_commands(commands: Any) -> None:
     backfill.add_argument("--since", type=_date, required=True)
     backfill.add_argument("--until", type=_date)
     incremental = subcommands.add_parser("run", help="Refresh the last three synced days onward")
-    for command in (backfill, incremental):
+    coverage = subcommands.add_parser("coverage", help="Show downloaded intervals and gaps")
+    for command in (backfill, incremental, coverage):
         command.add_argument("--dataset", nargs="+", action="extend", type=_dataset, metavar="NAME")
     subcommands.add_parser("status", help="Show progress without accessing the provider")
 
@@ -86,6 +88,9 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: Settings) -> in
     Returns:
         Zero only if every requested dataset completed.
     """
+    if args.sync_command == "coverage":
+        _print_coverage(engine, args.dataset or DATASETS, date.today())
+        return 0
     if args.sync_command == "status":
         for state in sync_status(engine):
             stamp = state.last_run_at.isoformat() if state.last_run_at else "-"
@@ -133,3 +138,33 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: Settings) -> in
     finally:
         provider.close()
     return 1 if failed else 0
+
+
+def _print_coverage(engine: Engine, datasets: tuple[str, ...] | list[str], today: date) -> None:
+    """Display downloaded intervals, internal gaps and an unsynced tail.
+
+    Args:
+        engine: Ledger database engine used exclusively for reading chunk dates.
+        datasets: Supported dataset names selected by the command line.
+        today: Machine-local date delimiting the not-yet-synced tail.
+
+    Raises:
+        sqlalchemy.exc.SQLAlchemyError: If the coverage query fails; the root
+            dispatcher converts it to sanitized database diagnostics.
+        ValueError: If a stored range ends before it starts.
+    """
+    for dataset, coverage in sync_coverage(engine, datasets).items():
+        if not coverage.intervals:
+            info(f"{dataset}: nothing downloaded")
+            continue
+        emit = ok if len(coverage.intervals) == 1 and not coverage.gaps else info
+        for start, end in coverage.intervals:
+            emit(f"{dataset}: covered from={start} to={end} days={(end - start).days + 1}")
+        for start, end in coverage.gaps:
+            info(f"{dataset}: gap from={start} to={end} days={(end - start).days + 1}")
+        for start, end in coverage.gaps:
+            info(f"athlete-ledger sync backfill --since {start} --until {end} --dataset {dataset}")
+        last = coverage.intervals[-1][1]
+        if last < today:
+            start = last + timedelta(days=1)
+            info(f"{dataset}: tail from={start} to={today} days={(today - last).days}")
