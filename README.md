@@ -203,6 +203,83 @@ UTC timestamps, and reader access: qualified `SELECT` on the owner tables succee
 DDL fail. Reader sessions use `ATHLETE_LEDGER.<table>`; no synonyms or default-schema changes are
 created. These live Oracle checks have not been run by the test suite.
 
+
+## Sync
+
+Apply the database migrations first. Sync runs only in the CLI, using the official Personal API
+SDK; the MCP server will read the ledger database only. Work with one sync process per database
+at a time. This phase adds no schema changes.
+
+Create a Personal API key for your own account using the
+[official Personal API instructions](https://developer.garmin.com/gc-developer-program/personal/personal-faq/).
+Set `GARMIN_PERSONAL_API_KEY` privately in your environment or local `.env`; the application passes
+that secret explicitly to SDK discovery. With neither configured, the SDK can use its default
+key file `~/.config/garmin/connect-personal-api-key`. Protect a key file with mode `0600`. Never
+put credentials on the command line. Key validity and expiry are independent of bearer tokens.
+
+The SDK caches bearer tokens in `~/.config/garmin/connect-personal-api-bearer-token.json`, outside
+the repository. New cache files are created with mode `0600`; the adapter tightens permissions on
+an existing cache before using it. A data request returning 401 triggers one forced token
+exchange and retry. A second 401 or a 403 is fatal. Transient 429/5xx/timeout/connection failures
+have up to three retries, waiting 2, 4 and 8 seconds. Authentication requests use the same transient
+retry budget. Provider error messages never include response bodies, request URLs, keys or tokens.
+
+Activate the Conda environment and run from the repository root. Backfill an explicit historical
+range, replacing the sample dates with dates relevant to your own account:
+
+```sh
+athlete-ledger sync backfill --since 2026-01-01 --until 2026-01-14
+athlete-ledger sync status
+athlete-ledger sync run
+```
+
+`--until` defaults to the machine's local date. Future dates and reversed ranges are rejected.
+By default all four datasets run: `activities`, `sleep`, `hrv`, `stress`. Limit a run with one or
+more names; repeated `--dataset` options are also accepted:
+
+```sh
+athlete-ledger sync backfill --since 2026-01-01 --until 2026-01-14 --dataset sleep hrv
+athlete-ledger sync run --dataset activities --dataset stress
+```
+
+Each dataset needs a successful backfill before its first incremental run. Incremental sync starts
+at that dataset's last committed date minus two days, refreshing its last three synced calendar
+days plus any newer days through today. If no committed date exists, the command reports that a
+backfill is needed. `sync status` reads only dataset progress dates, run timestamps and status;
+it does not discover credentials, construct a provider or contact the API.
+
+Requests use inclusive windows of at most seven days. Activities are paged with limit 100 through
+an empty terminating page, deduplicating activity IDs and rejecting pagination that makes no
+progress. Every chunk commits raw responses, normalized rows and state together. On failure, that
+chunk is rolled back, previous chunks remain committed, and a separate transaction records
+`failed` without advancing its last committed date. Other datasets continue; any failure produces
+a nonzero exit code. Re-running an interrupted backfill is safe: completed chunks can be fetched
+again, and identical raw responses are skipped. `sync run` resumes from the last committed date
+with the normal overlap.
+
+The ledger keeps raw responses append-only and hashes canonical UTF-8 JSON, comparing the latest
+response with the same endpoint, range and SDK call parameters. Matching content skips storage
+and normalization. Changed responses are stored before normalization; only rows whose normalized
+values change get a new update timestamp and source-response reference. Records absent from a
+later response are **not deleted**; provider-side deletions are outside this MVP. JSON documents
+that are not valid serializable JSON are rejected rather than altering their raw content.
+
+Output uses the terminal banner and `[OK]`/`[INFO]` helpers. Per dataset it shows chunk and request
+counts, raw stored/unchanged counts, normalized rows inserted/updated/unchanged, and skipped
+placeholder counts. Request counts include data-request retries and terminating empty activity
+pages, but exclude token exchanges. Row counts describe rows actually normalized; responses
+skipped by hash increment only `raw_unchanged`. Counts from a rolled-back chunk are discarded,
+while its attempted requests remain in the request count. Metric values, activity names and
+payloads are never printed. Full SDK logs are suppressed because their diagnostics can include
+cache paths; only sanitized endpoint/method/status errors are displayed.
+
+Local tests use fake clients and synthetic SQLite data, with guards against real HTTP calls and
+credential discovery. Before Phase 2, the maintainer should verify on ADB a 14-day backfill,
+repeat `sync run` against stable provider data and check `rows_updated=0`, then inspect
+`sync status`. New/recalculated provider data can legitimately produce inserts or updates; zero
+updates is expected only when normalized source values have not changed. See the SDK evidence in
+[the reference notes](docs/reference/README.md#personal-api-sdk-source-verification-phase-1b).
+
 ## Disclaimer
 
 athlete-ledger is an independent open-source project. It is **not affiliated with, endorsed by,
