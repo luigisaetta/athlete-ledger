@@ -600,8 +600,10 @@ interpretation of labels. Existing field names and meanings stay unchanged (addi
    fields and units, say that training effect and load are the provider's own per-activity values,
    that TSS/IF/normalized power exist mostly for power-meter activities, and that totals are sums
    only. Keep descriptions concise; no Args/Returns/Raises text.
-4. **Queries**: select only the needed `activity` columns; never `raw_response`, never names
-   unless enabled. No change to the read-only engine.
+4. **Queries**: select only the needed `activity` columns; never `raw_response.payload` or
+   `params` (the coverage query keeps reading only DISTINCT range_start/range_end via
+   `athlete_ledger.coverage.sync_coverage`), never names unless enabled. Keep the existing
+   coverage query unchanged. No change to the read-only engine.
 5. **Tests** (synthetic SQLite only): every new field with unit conversion and rounding
    (including m/s → km/h and seconds → minutes/hours); null members and stable nested shape; sums
    and new `missing` counts per group and overall, including all-null groups; existing fields
