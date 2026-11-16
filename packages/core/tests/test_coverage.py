@@ -301,18 +301,19 @@ def test_cli_defaults_without_key_provider_or_payload_output(
 
     event.listen(ledger, "before_cursor_execute", capture)
     monkeypatch.setattr("athlete_ledger.cli.create_db_engine", lambda settings: ledger)
-    # An interactive terminal must still produce only coverage lines, without a banner.
+    # Interactive coverage uses the same banner as the other sync commands.
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setenv("NO_COLOR", "1")
     assert run(["sync", "coverage"]) == 0
     output = capsys.readouterr()
     assert output.err == ""
-    assert len(output.out.splitlines()) == 4
+    assert len([line for line in output.out.splitlines() if line.startswith("  [")]) == 4
     assert "[OK] activities:" in output.out
     for dataset in DATASETS[1:]:
         assert f"[INFO] {dataset}: nothing downloaded" in output.out
     assert "SYNTHETIC-PRIVATE" not in output.out
-    assert "ATHLETE LEDGER" not in output.out
+    assert "ATHLETE LEDGER" in output.out
+    assert "Summary sync" in output.out
     assert len(statements) == 4
     assert all(sql.startswith("SELECT DISTINCT ") for sql in statements)
 
