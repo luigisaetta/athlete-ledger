@@ -445,3 +445,85 @@ async def test_date_schema_preserves_sanitized_date_validation(server, caplog) -
             assert "Dates must use YYYY-MM-DD" in text
             assert stamp not in text
     assert caplog.text == ""
+
+
+@pytest.mark.anyio
+async def test_activity_range_includes_end_day_last_second_and_excludes_next_midnight(
+    server, ledger_file
+) -> None:
+    """Include end-day seconds/fractions in lists and totals while excluding exterior dates."""
+    from datetime import datetime
+
+    from athlete_ledger.db.models import Activity
+    from athlete_ledger.sync_types import PROVIDER
+    from sqlalchemy import create_engine, insert
+
+    writer = create_engine(f"sqlite:///{ledger_file}")
+    with writer.begin() as connection:
+        for identity, stamp in [
+            (60, datetime(2020, 12, 31, 0, 0)),
+            (61, datetime(2020, 12, 30, 23, 59, 59)),
+            (62, datetime(2021, 1, 4, 23, 59, 59)),
+            (63, datetime(2021, 1, 4, 23, 59, 59, 999999)),
+            (64, datetime(2021, 1, 5, 0, 0)),
+        ]:
+            connection.execute(
+                insert(Activity).values(
+                    provider=PROVIDER,
+                    activity_id=identity,
+                    start_time_local=stamp,
+                    activity_type="synthetic-boundary",
+                    source_response_id=1,
+                )
+            )
+    writer.dispose()
+    async with Client(server, mode="2026-07-28") as client:
+        args = {"start": "2020-12-31", "end": "2021-01-04"}
+        result = await client.call_tool("list_activities", args)
+        assert not result.is_error
+        data = result.structured_content
+        assert data["total_matching"] == 7
+        assert [row["activity_id"] for row in data["activities"]] == [60, 10, 20, 30, 40, 62, 63]
+        assert data["activities"][-2]["start_time_local"] == "2021-01-04T23:59:59"
+        result = await client.call_tool("activity_totals", {**args, "group_by": "sport"})
+        assert not result.is_error
+        assert result.structured_content["overall"]["activity_count"] == 7
+        boundary = next(
+            row for row in result.structured_content["groups"] if row["key"] == "synthetic-boundary"
+        )
+        assert boundary["activity_count"] == 3
+
+
+def test_oracle_activity_date_predicate_binds_only_midnight_boundaries() -> None:
+    """Compile the actual Oracle predicate without fractional precision or an ADB connection."""
+    from datetime import date, datetime
+
+    from athlete_ledger.db.models import Activity
+    from athlete_ledger_mcp.queries import activity_filter
+    from sqlalchemy import select
+    from sqlalchemy.dialects import oracle
+
+    statement = select(Activity.activity_id).where(
+        *activity_filter(date(2020, 12, 31), date(2021, 1, 4))
+    )
+    compiled = statement.compile(dialect=oracle.dialect())
+    assert "activity.start_time_local >= " in str(compiled)
+    assert "activity.start_time_local < " in str(compiled)
+    assert "activity.start_time_local <= " not in str(compiled)
+    boundaries = [value for value in compiled.params.values() if isinstance(value, datetime)]
+    assert boundaries == [datetime(2020, 12, 31), datetime(2021, 1, 5)]
+
+
+@pytest.mark.anyio
+async def test_activity_maximum_date_does_not_overflow(server) -> None:
+    """Handle the final representable inclusive date without computing an invalid next day."""
+    async with Client(server, mode="2026-07-28") as client:
+        for tool, extra in [("list_activities", {}), ("activity_totals", {"group_by": "week"})]:
+            result = await client.call_tool(
+                tool, {"start": "9999-12-31", "end": "9999-12-31", **extra}
+            )
+            assert not result.is_error
+            count = result.structured_content.get("total_matching")
+            if count is None:
+                count = result.structured_content["overall"]["activity_count"]
+            assert count == 0

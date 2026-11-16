@@ -14,7 +14,7 @@ from athlete_ledger.coverage import Coverage, sync_coverage
 from athlete_ledger.db.models import Activity, DailyHRV, DailySleep, DailyStress, SyncState
 from athlete_ledger.sync_types import PROVIDER
 from mcp.server.mcpserver.exceptions import ToolError
-from sqlalchemy import Engine, func, select
+from sqlalchemy import ColumnElement, Engine, func, select
 
 from athlete_ledger_mcp.results import (
     ActivityAggregate,
@@ -127,7 +127,7 @@ def scaled(value: float | int | None, divisor: float = 1, digits: int = 1) -> fl
     return round(value / divisor, digits) if value is not None else None
 
 
-def activity_filter(start: date, end: date) -> tuple[Any, ...]:
+def activity_filter(start: date, end: date) -> tuple[ColumnElement[bool], ...]:
     """Build portable provider and naive local-datetime predicates.
 
     Args:
@@ -135,13 +135,19 @@ def activity_filter(start: date, end: date) -> tuple[Any, ...]:
         end: Last local calendar day to include.
 
     Returns:
-        SQLAlchemy predicates including all times on both endpoint days.
+        Provider and half-open datetime predicates from start midnight through
+        the next midnight after end, avoiding fractional-second upper bounds.
+        At date.max the upper bound is unbounded because no later date exists.
     """
-    return (
+    predicates: tuple[ColumnElement[bool], ...] = (
         Activity.provider == PROVIDER,
         Activity.start_time_local >= datetime.combine(start, time.min),
-        Activity.start_time_local <= datetime.combine(end, time.max),
     )
+    if end < date.max:
+        predicates += (
+            Activity.start_time_local < datetime.combine(end + timedelta(days=1), time.min),
+        )
+    return predicates
 
 
 def ledger_status(engine: Engine, today: date) -> LedgerStatus:
