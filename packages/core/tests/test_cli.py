@@ -15,7 +15,7 @@ from athlete_ledger.errors import DatabaseError
 
 
 def test_sqlite_cli_upgrade_and_check(tmp_path: Path) -> None:
-    """Verify sqlite cli upgrade and check."""
+    """Reach the current Alembic head on a fresh SQLite file and permit repeated upgrades."""
     env = dict(os.environ, ATHLETE_LEDGER_DB_URL=f"sqlite:///{tmp_path / 'nested' / 'cli.db'}")
     for args in (["--version"], ["db", "upgrade"], ["db", "upgrade"], ["db", "check"]):
         result = subprocess.run(
@@ -24,7 +24,7 @@ def test_sqlite_cli_upgrade_and_check(tmp_path: Path) -> None:
         assert result.returncode == 0, result.stderr
     assert "Backend: sqlite" in result.stdout
     assert "Server version:" in result.stdout
-    assert "Alembic revision: 0001_ledger_store" in result.stdout
+    assert "Alembic revision: 0002_activity_training_metrics" in result.stdout
 
 
 def test_cli_offline_ignores_incomplete_oracle_settings(

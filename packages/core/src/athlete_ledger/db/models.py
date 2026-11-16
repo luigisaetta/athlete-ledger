@@ -91,6 +91,25 @@ class Activity(SourceRecord, Base):
     duration_s: Mapped[float | None]
     avg_hr_bpm: Mapped[float | None]
     calories_kcal: Mapped[float | None]
+    aerobic_training_effect: Mapped[float | None]
+    anaerobic_training_effect: Mapped[float | None]
+    training_effect_label: Mapped[str | None] = mapped_column(String(64))
+    training_load: Mapped[float | None]
+    training_stress_score: Mapped[float | None]
+    intensity_factor: Mapped[float | None]
+    normalized_power_w: Mapped[float | None]
+    elevation_gain_m: Mapped[float | None]
+    elevation_loss_m: Mapped[float | None]
+    max_hr_bpm: Mapped[float | None]
+    avg_speed_mps: Mapped[float | None]
+    moving_duration_s: Mapped[float | None]
+    moderate_intensity_min: Mapped[int | None]
+    vigorous_intensity_min: Mapped[int | None]
+    hr_zone_1_s: Mapped[float | None]
+    hr_zone_2_s: Mapped[float | None]
+    hr_zone_3_s: Mapped[float | None]
+    hr_zone_4_s: Mapped[float | None]
+    hr_zone_5_s: Mapped[float | None]
     file_status: Mapped[str] = mapped_column(
         String(32), default="not_downloaded", server_default=text("'not_downloaded'")
     )

@@ -146,3 +146,85 @@ GRANT SELECT ON alembic_version TO ATHLETE_LEDGER_READER
 INSERT INTO alembic_version (version_num) VALUES ('0001_ledger_store')
 
 /
+
+-- Running upgrade 0001_ledger_store -> 0002_activity_training_metrics
+
+ALTER TABLE activity ADD aerobic_training_effect FLOAT
+
+/
+
+ALTER TABLE activity ADD anaerobic_training_effect FLOAT
+
+/
+
+ALTER TABLE activity ADD training_effect_label VARCHAR2(64 CHAR)
+
+/
+
+ALTER TABLE activity ADD training_load FLOAT
+
+/
+
+ALTER TABLE activity ADD training_stress_score FLOAT
+
+/
+
+ALTER TABLE activity ADD intensity_factor FLOAT
+
+/
+
+ALTER TABLE activity ADD normalized_power_w FLOAT
+
+/
+
+ALTER TABLE activity ADD elevation_gain_m FLOAT
+
+/
+
+ALTER TABLE activity ADD elevation_loss_m FLOAT
+
+/
+
+ALTER TABLE activity ADD max_hr_bpm FLOAT
+
+/
+
+ALTER TABLE activity ADD avg_speed_mps FLOAT
+
+/
+
+ALTER TABLE activity ADD moving_duration_s FLOAT
+
+/
+
+ALTER TABLE activity ADD moderate_intensity_min INTEGER
+
+/
+
+ALTER TABLE activity ADD vigorous_intensity_min INTEGER
+
+/
+
+ALTER TABLE activity ADD hr_zone_1_s FLOAT
+
+/
+
+ALTER TABLE activity ADD hr_zone_2_s FLOAT
+
+/
+
+ALTER TABLE activity ADD hr_zone_3_s FLOAT
+
+/
+
+ALTER TABLE activity ADD hr_zone_4_s FLOAT
+
+/
+
+ALTER TABLE activity ADD hr_zone_5_s FLOAT
+
+/
+
+UPDATE alembic_version SET version_num='0002_activity_training_metrics' WHERE alembic_version.version_num = '0001_ledger_store'
+
+/

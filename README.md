@@ -176,8 +176,23 @@ installation or `init_oracle_client()` call is needed. `db check` prints only ba
 version and Alembic revision. Failures return a nonzero exit status: settings diagnostics list only
 the missing or invalid environment variable names; database diagnostics show only an available
 `ORA-nnnnn` or `DPY-nnnn` code; filesystem diagnostics show only the `OSError` type. Original error
-messages, settings values, paths, SQL and bound parameters are not printed. Successful Phase 1a
-upgrades report `0001_ledger_store`; an empty database reports `unversioned`.
+messages, settings values, paths, SQL and bound parameters are not printed. Successful upgrades
+report `0002_activity_training_metrics`; an empty database reports `unversioned`.
+
+**Upgrading an existing database:** activate the project environment and run the upgrade as the
+schema owner, then check the revision:
+
+```sh
+athlete-ledger db upgrade
+athlete-ledger db check
+```
+
+On ADB, `python scripts/create_tables.py` performs the same upgrade/check sequence. Both fresh
+and existing databases reach `0002_activity_training_metrics`; no separate installation path is
+needed. This revision adds 19 nullable activity training metric columns, without changing existing
+values or reader grants. The existing table-level SELECT grant covers the new columns. They stay
+NULL until the next patch adds normalization/rebuilding from saved raw responses; this patch does
+not populate them or expose them through MCP. Sync and the existing MCP tools remain unchanged.
 
 Generate the reviewable Oracle schema from Alembic without connecting:
 
