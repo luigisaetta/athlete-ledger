@@ -287,7 +287,7 @@ def test_activity_paging_keeps_raw_pages_and_rejects_no_progress():
     instance, client, auth, waits = provider(pages)
     responses = list(instance.responses("activities", START, START))
     assert [item.payload for item in responses] == pages
-    assert [item["start"] for item in client.calls] == [0, 100, 200]
+    assert [item["start"] for item in client.calls] == [0, 2, 4]
     assert all(item["limit"] == 100 for item in client.calls)
     instance, *_ = provider([[{"activityId": 1}], [{"activityId": 1}]])
     with pytest.raises(ProviderError, match="no progress"):
@@ -358,3 +358,31 @@ def test_explicit_empty_key_is_not_treated_as_unset():
         list(instance.responses("sleep", START, START))
     resolver.assert_called_once_with("")
     assert "SYNTHETIC-PRIVATE" not in str(error.value)
+
+
+def test_activity_offset_tracks_short_server_capped_pages():
+    """Verify a server capped at 60 records returns every activity without offset gaps."""
+    activities = [{"activityId": identifier} for identifier in range(120)]
+    instance, client, auth, waits = provider([])
+
+    def capped_search(**params):
+        """Return at most 60 activities starting at the requested record offset.
+
+        Args:
+            **params: SDK search arguments, including start offset and requested limit.
+
+        Returns:
+            The next slice of synthetic activity records, or an empty terminal page.
+        """
+        client.calls.append(params)
+        start = params["start"]
+        return activities[start : start + 60]
+
+    client.search_activities = capped_search
+    responses = list(instance.responses("activities", START, START))
+    assert [len(response.payload) for response in responses] == [60, 60, 0]
+    assert [params["start"] for params in client.calls] == [0, 60, 120]
+    assert all(params["limit"] == 100 for params in client.calls)
+    assert [record["activityId"] for response in responses for record in response.payload] == list(
+        range(120)
+    )

@@ -282,7 +282,7 @@ class PersonalProvider:
             yield Response(endpoint, params, payload)
             if dataset != "activities" or not page:
                 break
-            offset += 100
+            offset += len(page)
 
     def close(self) -> None:
         """Close both sessions without exposing SDK errors.
