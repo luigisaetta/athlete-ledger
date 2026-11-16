@@ -43,9 +43,8 @@ still describes legacy HTTP options such as `stateless_http=True`: that option a
 prove conformance to the new protocol. Use the documented compatibility facilities and test both
 protocol eras rather than recreating the handshake or transport.
 
-Verification gap: the guide and repository were reviewed, but no SDK runtime is installed or
-exercised in Phase 0. Confirm a published 2.x release and its exact serving configuration before
-Phase 2, then constrain the dependency and record the resolved version in `uv.lock`.
+Phase 2 closes the runtime verification gap: the official `mcp==2.3.0` distribution is
+installed and locked. See the source verification below for the serving and testing APIs.
 
 ## OCI Responses API
 
@@ -217,3 +216,43 @@ Maintainer verification still required: real 14-day backfill on ADB, immediate r
 runs with zero updates when provider data is stable, and `sync status`. Confirm real pagination,
 summary shapes, key discovery/token-cache behavior and permission mode on the maintainer's machine.
 Report counts, date ranges and sanitized status codes only; do not attach raw payloads or secrets.
+
+## MCP SDK source verification (Phase 2)
+
+Installed versions: `mcp==2.3.0`, `mcp-types==2.3.0`. Reviewed the installed distribution's
+README in METADATA and Python docstrings, `server/mcpserver/server.py`, `tools/base.py`,
+`tools/tool_manager.py`, `utilities/func_metadata.py`, `utilities/logging.py`,
+`client/client.py`, `client/_memory.py`, `client/stdio.py`, `cli/cli.py`, `shared/memory.py`,
+`server/_otel.py` and `mcp_types/version.py` / `_types.py` before server implementation.
+
+Verified API contracts:
+
+- Import `MCPServer` from `mcp.server.mcpserver`; construct with `log_level="WARNING"`.
+  Register functions via `server.tool(title=..., annotations=..., structured_output=True)`.
+- `mcp.types.ToolAnnotations` uses Python snake-case `read_only_hint`, `idempotent_hint`,
+  `destructive_hint` and `open_world_hint`; serialization publishes the protocol's camelCase
+  names. Each tool may also have a title.
+- Pydantic return annotations generate `outputSchema`. The SDK validates the result and emits
+  `structuredContent` using JSON-mode model serialization, plus a text rendering for compatibility.
+- Raise `mcp.server.mcpserver.exceptions.ToolError` for anticipated, sanitized failures. The
+  SDK maps these to `isError` results. Pydantic argument errors are also tool errors; use
+  input-hiding validation models and application-controlled diagnostics for private inputs.
+- `server.run(transport="stdio")` runs the official stdio transport. It delegates protocol
+  handling to the SDK, including modern per-request metadata and legacy client compatibility.
+  The installed protocol registry includes `2026-07-28` as the latest modern version.
+- `mcp.client.Client(server, mode="2026-07-28")` supports in-process tests without network;
+  `Client(StdioServerParameters(...), mode="2026-07-28")` supports subprocess checks.
+  Calls use `await client.list_tools()` and `await client.call_tool(name, arguments)`.
+- SDK logging defaults can include exceptions and invalid request content. The application
+  isolates dependency loggers and emits only controlled stderr diagnostics. SDK tracing uses
+  `opentelemetry-api`; the CLI configures its public no-op tracer provider, with no exporter.
+
+The installed CLI's Inspector launcher invokes `npx @modelcontextprotocol/inspector` followed
+by the server command; the README applies that same argument ordering to the installed ledger
+entry point without the SDK CLI extra or a separate project environment.
+
+Verification uses the SDK in-process client and stdio subprocesses in both modern and legacy
+modes. A raw stdout smoke check also verifies newline-delimited JSON-RPC without banners or
+prints. Reader tests inspect Oracle engine construction and the schema hook without connecting;
+all actual database tests use synthetic SQLite fixtures. Inspector/desktop and ADB behavior
+remain maintainer checks. No HTTP transport, provider access or telemetry exporter is configured.

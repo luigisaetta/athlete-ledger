@@ -324,6 +324,105 @@ repeat `sync run` against stable provider data and check `rows_updated=0`, then 
 updates is expected only when normalized source values have not changed. See the SDK evidence in
 [the reference notes](docs/reference/README.md#personal-api-sdk-source-verification-phase-1b).
 
+## MCP server
+
+`athlete-ledger-mcp` serves exactly four read-only, structured data tools over **stdio**.
+It reads the ledger only; it never imports the sync adapter, discovers a provider key or
+contacts the provider. Tool results contain data, not training advice or narrative analysis.
+
+| Tool | Returned data |
+|---|---|
+| `ledger_status()` | Local today, per-dataset downloaded intervals and gaps, sync progress, first/last record dates and sports with activity counts. |
+| `list_activities(start, end, sport=None, limit=50)` | Local-date activity summaries, optional exact sport filter, stable ordering, total match count, truncation and clipped download coverage. Limit: 1–200. |
+| `activity_totals(start, end, group_by)` | Groups by ISO week (with Monday), calendar month or sport, overall totals, missing-value counts, duration-weighted HR and clipped coverage. |
+| `daily_wellness(start, end, areas=None)` | Every day in an inclusive range of at most 92 days, with sleep/HRV/stress metrics and download/record state for each requested area. |
+
+Dates use `YYYY-MM-DD` and include both endpoints. Activity start times are provider-local wall
+time without a timezone. Results use km (2 decimals), minutes (1), hours (2), HR in beats/minute,
+respiration in breaths/minute and HRV in milliseconds; averages have 1 decimal. Null means
+unavailable; zero remains valid. Totals skip nulls and report missing counts for each input
+metric. An empty/all-null sum is null. Weighted HR excludes activities missing either HR or
+duration and is null when the eligible total duration is zero. Unknown sport groups use
+`unknown`; actual sport fields remain null when unknown.
+
+Wellness states distinguish `not_downloaded` (outside coverage), `no_record` (downloaded but no
+normalized row) and `ok` (row exists; individual metrics may be null). `areas` defaults to all
+three areas; an empty list returns dated rows with no selected areas. Requested-range coverage
+includes missing dates at either edge as gaps; `ledger_status` shows internal gaps only.
+
+Install/sync from the repository in the active Conda environment:
+
+```sh
+conda activate athlete-ledger
+export UV_PROJECT_ENVIRONMENT="$CONDA_PREFIX"
+uv sync --all-packages --inexact --locked
+command -v athlete-ledger-mcp
+```
+
+Keep a private settings file outside source control, based on `.env.example`. For SQLite,
+`ATHLETE_LEDGER_DB_URL` must identify an **existing** ledger file. Use an absolute SQLite path
+when a desktop client may start in another directory, and quote a dotenv URL containing spaces
+or `#`. Relative paths are resolved against the process working directory, not the settings
+file's directory. SQLite is opened with URI `mode=ro`; missing files are rejected and never
+created. Create/migrate/populate the ledger separately with the regular CLI.
+
+For Oracle, configure `ATHLETE_LEDGER_RO_DB_USER` and `ATHLETE_LEDGER_RO_DB_PASSWORD` for the
+separately provisioned **ATHLETE_LEDGER_RO** reader, plus the existing DSN, wallet directory and
+wallet password variables. Both reader fields are required: owner credentials are ignored and
+never used as fallback. `ATHLETE_LEDGER_DB_SCHEMA` defaults to `ATHLETE_LEDGER`; it accepts only
+uppercase unquoted identifiers beginning with A–Z, followed by A–Z/0–9/underscore, at most 128
+characters. Each new reader connection sets `CURRENT_SCHEMA` to this validated owner schema.
+The reader must have SELECT grants on the ledger tables as provided by the bootstrap/migration.
+The MCP process never runs migrations or grants.
+
+Start the server with an absolute private settings-file path:
+
+```sh
+/absolute/path/to/conda/envs/athlete-ledger/bin/athlete-ledger-mcp --env-file /absolute/private/path/ledger.env
+```
+
+The default settings file is `.env` in the current directory if present. There is **no banner**
+and no human-readable stdout: stdout is reserved for MCP. Warnings/diagnostics go to stderr,
+with configuration/connection failures sanitized and returning nonzero. Database failures during
+a tool call produce a tool error with only a fixed message and an optional ORA/DPY code. No SQL,
+parameters, record values, credentials or tracebacks are logged. No telemetry exporter or HTTP
+transport is configured; the process uses a no-op tracer provider.
+
+In a desktop client's MCP server configuration, use the executable path reported above and an
+absolute `--env-file` argument. A typical configuration is:
+
+```json
+{
+  "mcpServers": {
+    "athlete-ledger": {
+      "command": "/absolute/path/to/conda/envs/athlete-ledger/bin/athlete-ledger-mcp",
+      "args": ["--env-file", "/absolute/private/path/ledger.env"]
+    }
+  }
+}
+```
+
+Keep secrets out of the client configuration. With Node.js/npm available, launch the official
+[MCP Inspector](https://github.com/modelcontextprotocol/inspector) against the same command:
+
+```sh
+npx @modelcontextprotocol/inspector /absolute/path/to/conda/envs/athlete-ledger/bin/athlete-ledger-mcp --env-file /absolute/private/path/ledger.env
+```
+
+The Inspector is a separate local development client; the ledger server still uses stdio.
+Verify that exactly the four tools appear with read-only annotations and output schemas. Test
+both the Inspector and a desktop client against a populated local SQLite ledger and then ADB
+as **ATHLETE_LEDGER_RO**. Ask, for example: “Which periods are downloaded?”, “List activities
+between these dates”, “Show activity totals by ISO week” and “Show sleep and HRV day by day”.
+Check gaps, nulls, units, truncated lists, ISO-week boundaries and days without records against
+your own ledger. Keep real results and credentials private when reporting test outcomes.
+
+**Privacy:** tool results are sent to whatever model the client uses. Activity names may contain
+places or people; they are not selected and the `activity_name` key is absent by default.
+Set `ATHLETE_LEDGER_MCP_INCLUDE_ACTIVITY_NAMES=true` in the private settings only if you intend
+to include them. Metric values remain part of requested tool results even with names disabled.
+Choose a client/model whose data handling meets your requirements.
+
 ## Disclaimer
 
 athlete-ledger is an independent open-source project. It is **not affiliated with, endorsed by,
