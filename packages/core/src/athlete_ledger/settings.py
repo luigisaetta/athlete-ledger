@@ -1,4 +1,9 @@
-"""Database configuration loaded without opening connections."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Database configuration loaded without opening connections.
+"""  # noqa: D205, D212
 
 from pathlib import Path
 from typing import Self
@@ -24,6 +29,10 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
+    personal_api_key: SecretStr | None = Field(
+        default=None, validation_alias="GARMIN_PERSONAL_API_KEY", repr=False
+    )
+
     db_url: str | None = Field(default=None, repr=False)
     db_user: str | None = Field(default=None, repr=False)
     db_password: SecretStr | None = None
@@ -35,17 +44,34 @@ class Settings(BaseSettings):
 
     @property
     def backend(self) -> str:
-        """Return the configured backend without revealing its address."""
+        """Select the backend from the presence of an Oracle DSN.
+
+        Returns:
+            oracle when db_dsn is set; otherwise sqlite.
+        """
         return "oracle" if self.db_dsn else "sqlite"
 
     @property
     def sqlite_url(self) -> str:
-        """Return the explicit SQLite URL or the local default."""
+        """Resolve the SQLite connection URL for local storage.
+
+        Returns:
+            The configured db_url, or sqlite:///./data/athlete_ledger.db when no URL is
+            supplied.
+        """
         return self.db_url or DEFAULT_DB_URL
 
     @model_validator(mode="after")
     def validate_database(self) -> Self:
-        """Reject incomplete Oracle settings and incompatible selectors."""
+        """Reject conflicting selectors and incomplete or unsupported connection settings.
+
+        Returns:
+            This Settings instance after cross-field validation succeeds.
+
+        Raises:
+            SettingsIssue: If URL and DSN are both set, Oracle mTLS fields are missing, or
+                DB_URL is malformed/not a supported SQLite URL.
+        """
         if self.db_dsn:
             if self.db_url:
                 raise SettingsIssue(
@@ -83,8 +109,25 @@ class Settings(BaseSettings):
 
 
 def validation_environment_names(error: ValidationError) -> list[str]:
-    """Return allowlisted environment names without rendering messages or inputs."""
-    allowed = {name: f"ATHLETE_LEDGER_{name.upper()}" for name in Settings.model_fields}
+    """Map recognized validation locations to safe environment variable names.
+
+    Args:
+        error: Pydantic validation error whose locations and SettingsIssue field
+            metadata identify invalid settings.
+
+    Returns:
+        Sorted, deduplicated allowlisted environment names; messages, inputs and unknown
+        locations are omitted.
+    """
+    allowed = {
+        name: (
+            "GARMIN_PERSONAL_API_KEY"
+            if name == "personal_api_key"
+            else f"ATHLETE_LEDGER_{name.upper()}"
+        )
+        for name in Settings.model_fields
+    }
+    allowed.update({environment: environment for environment in tuple(allowed.values())})
     fields: set[str] = set()
     for detail in error.errors(include_input=False, include_url=False):
         location = detail["loc"]
@@ -93,4 +136,4 @@ def validation_environment_names(error: ValidationError) -> list[str]:
         issue = detail.get("ctx", {}).get("error")
         if isinstance(issue, SettingsIssue):
             fields.update(name for name in issue.fields if name in allowed)
-    return sorted(allowed[name] for name in fields)
+    return sorted({allowed[name] for name in fields})

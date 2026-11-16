@@ -1,4 +1,9 @@
-"""Validate the Oracle setup launcher without a real Oracle connection."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Validate the Oracle setup launcher without a real Oracle connection.
+"""  # noqa: D205, D212
 
 import os
 import runpy
@@ -23,6 +28,7 @@ def test_script_sequences_migration_and_check(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Verify script sequences migration and check."""
     monkeypatch.setattr("sys.argv", [str(SCRIPT)])
     with patch("athlete_ledger.cli.run", side_effect=statuses) as dispatch:
         with pytest.raises(SystemExit) as error:
@@ -47,6 +53,7 @@ def test_oracle_guard_prevents_sqlite_creation(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """Verify oracle guard prevents sqlite creation."""
     database = tmp_path / "must-not-exist.db"
     monkeypatch.setenv("ATHLETE_LEDGER_DB_URL", f"sqlite:///{database}")
     with patch("athlete_ledger.cli.create_db_engine") as factory:
@@ -60,6 +67,7 @@ def test_oracle_guard_prevents_sqlite_creation(
 
 def test_installed_script_refuses_missing_oracle_configuration(tmp_path: Path) -> None:
     # No local .env or real process settings are used by the core fixture.
+    """Verify installed script refuses missing oracle configuration."""
     env = dict(os.environ, ATHLETE_LEDGER_DB_PASSWORD="synthetic-private-password")
     result = subprocess.run(
         ["python", str(SCRIPT)],
@@ -76,6 +84,7 @@ def test_installed_script_refuses_missing_oracle_configuration(tmp_path: Path) -
 
 
 def test_script_help_does_not_load_settings_or_connect() -> None:
+    """Verify script help does not load settings or connect."""
     with patch("athlete_ledger.cli.run") as dispatch, patch("sys.argv", [str(SCRIPT), "--help"]):
         with pytest.raises(SystemExit) as error:
             runpy.run_path(str(SCRIPT), run_name="__main__")

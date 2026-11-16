@@ -1,4 +1,9 @@
-"""Engine construction must not connect to Oracle or expose authentication."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Engine construction must not connect to Oracle or expose authentication.
+"""  # noqa: D205, D212
 
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +17,7 @@ from pydantic import SecretStr
 
 
 def test_sqlite_parent_and_foreign_keys(tmp_path: Path) -> None:
+    """Verify sqlite parent and foreign keys."""
     path = tmp_path / "nested" / "ledger.db"
     engine = create_db_engine(Settings(db_url=f"sqlite:///{path}"))
     try:
@@ -24,6 +30,7 @@ def test_sqlite_parent_and_foreign_keys(tmp_path: Path) -> None:
 
 
 def test_oracle_arguments_without_connecting() -> None:
+    """Verify oracle arguments without connecting."""
     settings = Settings(
         db_dsn="synthetic_low",
         db_user="synthetic_owner",
@@ -51,6 +58,7 @@ def test_oracle_arguments_without_connecting() -> None:
 
 
 def test_thick_mode_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify thick mode rejected."""
     monkeypatch.setattr("oracledb.is_thin_mode", lambda: False)
     settings = Settings(
         db_dsn="synthetic_low",
@@ -77,6 +85,7 @@ def test_thick_mode_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
 )
 def test_invalid_constructed_settings_raise_explicit_error(updates: dict[str, object]) -> None:
     # Bypass validation to prove the engine guard remains effective even with python -O.
+    """Verify invalid constructed settings raise explicit error."""
     settings = Settings.model_construct(
         db_dsn="synthetic-private-alias",
         db_user="synthetic-private-user",

@@ -1,4 +1,9 @@
-"""Public exceptions with messages safe for command-line output."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Public exceptions with messages safe for command-line output.
+"""  # noqa: D205, D212
 
 import re
 
@@ -14,6 +19,13 @@ class SettingsIssue(ValueError):
     """A model-level validation failure with field names separate from values."""
 
     def __init__(self, message: str, fields: tuple[str, ...]) -> None:
+        """Associate a validation failure with setting names independently of their values.
+
+        Args:
+            message: Validation explanation containing no input values or credentials.
+            fields: Internal Settings field names involved in the failure; the CLI maps
+                allowlisted names to environment variables.
+        """
         super().__init__(message)
         self.fields = fields
 
@@ -30,12 +42,29 @@ class DatabaseError(LedgerError):
     """A database operation failed without exposing driver diagnostics."""
 
     def __init__(self, message: str, *, code: str | None = None) -> None:
+        """Retain a safe database failure message and an optional validated error code.
+
+        Args:
+            message: Application-controlled explanation, excluding SQL, bound values and
+                driver text.
+            code: Candidate ORA-nnnnn or DPY-nnnn code; malformed or absent codes are stored
+                as None.
+        """
         super().__init__(message)
         self.code = code if code is not None and _DATABASE_CODE.fullmatch(code) else None
 
 
 def database_error_code(error: BaseException) -> str | None:
-    """Extract only an ORA/DPY code, never SQL statements or bound parameters."""
+    """Extract a database code without rendering SQL statements or bound parameters.
+
+    Args:
+        error: Database or SQLAlchemy exception to inspect, following
+            StatementError.orig wrappers.
+
+    Returns:
+        The first allowlisted ORA/DPY code, or None when absent, malformed or hidden
+        behind a cyclic/unsupported wrapper.
+    """
     seen: set[int] = set()
     while isinstance(error, StatementError):
         seen.add(id(error))

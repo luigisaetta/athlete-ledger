@@ -1,1 +1,6 @@
-"""Immutable schema revisions."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Immutable schema revisions.
+"""  # noqa: D205, D212

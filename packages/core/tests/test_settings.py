@@ -1,4 +1,9 @@
-"""Configuration validation with synthetic credentials only."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Configuration validation with synthetic credentials only.
+"""  # noqa: D205, D212
 
 from pathlib import Path
 
@@ -11,6 +16,12 @@ SYNTHETIC_WALLET_PASSWORD = "synthetic-wallet-secret"
 
 
 def oracle_options() -> dict[str, object]:
+    """Build a complete Oracle settings dictionary using synthetic credentials only.
+
+    Returns:
+        Settings keyword arguments for a synthetic owner, DSN, wallet directory and both
+        secret passwords.
+    """
     return {
         "db_user": "synthetic_owner",
         "db_password": SYNTHETIC_PASSWORD,
@@ -21,12 +32,14 @@ def oracle_options() -> dict[str, object]:
 
 
 def test_defaults() -> None:
+    """Verify defaults."""
     settings = Settings()
     assert settings.backend == "sqlite"
     assert settings.sqlite_url == DEFAULT_DB_URL
 
 
 def test_oracle_selection_and_secret_repr() -> None:
+    """Verify oracle selection and secret repr."""
     settings = Settings(**oracle_options())
     assert settings.backend == "oracle"
     assert isinstance(settings.db_password, SecretStr)
@@ -38,6 +51,7 @@ def test_oracle_selection_and_secret_repr() -> None:
     "missing", ["db_user", "db_password", "db_wallet_dir", "db_wallet_password"]
 )
 def test_incomplete_oracle(missing: str) -> None:
+    """Verify incomplete oracle."""
     options = oracle_options()
     options.pop(missing)
     with pytest.raises(ValidationError) as error:
@@ -47,6 +61,7 @@ def test_incomplete_oracle(missing: str) -> None:
 
 
 def test_conflicting_selectors() -> None:
+    """Verify conflicting selectors."""
     with pytest.raises(ValidationError, match="Set only one") as error:
         Settings(**oracle_options(), db_url="sqlite://")
     assert SYNTHETIC_PASSWORD not in str(error.value)
@@ -54,12 +69,14 @@ def test_conflicting_selectors() -> None:
 
 @pytest.mark.parametrize("url", ["oracle+oracledb://u:synthetic-secret@host", "not-a-url"])
 def test_invalid_url_is_sanitized(url: str) -> None:
+    """Verify invalid url is sanitized."""
     with pytest.raises(ValidationError) as error:
         Settings(db_url=url)
     assert "synthetic-secret" not in str(error.value)
 
 
 def test_dotenv_and_environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Verify dotenv and environment."""
     (tmp_path / ".env").write_text(
         "ATHLETE_LEDGER_DB_URL=sqlite:///dotenv.db\n"
         "ATHLETE_LEDGER_DB_DSN=\n"

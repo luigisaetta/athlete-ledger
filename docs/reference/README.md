@@ -164,3 +164,56 @@ reader grants. Follow the README's Database checklist on the maintainer's own ma
 Phase 1b. Oracle DDL is not transactionally rolled back; inspect partially applied migrations
 before retrying. The bootstrap preserves existing users' passwords and does not remove any
 pre-existing grants.
+
+
+## Personal API SDK source verification (Phase 1b)
+
+Installed and locked version: `garmin-connect-personal-api-python==1.0.0`, imported as
+`garmin_personal_api`. This review read the installed Python source (`api_keys.py`,
+`_credentials.py`, `auth.py`, `client.py`, `errors.py`, `constants.py`, `__init__.py`). It did not
+contact Garmin or read any real key, token cache, wallet or `.env`. Tests use synthetic settings
+files inside temporary directories where required to verify settings loading.
+
+Verified facts:
+
+- `resolve_api_key` names its explicit argument **`api_key`**, not `key`. The application uses
+  `resolve_api_key(api_key=...)`. Explicit values override discovery; with None, the SDK checks
+  `GARMIN_PERSONAL_API_KEY` and then `~/.config/garmin/connect-personal-api-key`. It does not
+  implicitly load the application's `.env`, so the settings model supplies the explicit secret.
+- `PersonalApiAuthenticator.obtain_token(api_key, force_refresh=False)` returns `BearerToken`.
+  The data-client constructor and `update_bearer_token` take **the access-token string**, not the
+  token object. The adapter passes `BearerToken.access_token`.
+- The default token cache is `~/.config/garmin/connect-personal-api-bearer-token.json`. Its
+  fingerprint includes the key and base URL. The SDK reuses a token only when more than one hour
+  remains before expiry; `force_refresh=True` bypasses cache reuse. New cache files use `0600`,
+  but existing modes are not repaired by the SDK. The adapter tightens an existing cache to `0600`.
+- The SDK issues one `requests` call per token/data operation, with no HTTP retry loop and no
+  automatic refresh in the data client on 401. The application adds the bounded backoff and the
+  single refresh/retry. Both SDK sessions have explicit 30-second request timeouts here.
+- `HttpError` exposes `status_code`, `method`, `url`, `response_text`; its constructed message
+  embeds the response text. The adapter never calls `str()` on it, reads only its status, and
+  supplies verb/endpoint from fixed application mappings. A poisoned-`__str__` test verifies this.
+- SDK log messages include request paths/parameters and can include credential-cache paths in
+  warnings. CLI sync keeps the SDK logger at WARNING with a null handler and no propagation,
+  using only application-controlled diagnostics instead.
+- `search_activities` accepts keyword `start`, `limit`, `start_date`, `end_date`; it forwards one
+  request and performs no paging. Sleep summaries send start/end as query parameters; HRV and
+  stress summaries embed dates in the endpoint path. Wrapper return values are unmodified
+  decoded JSON, or None for an empty body. The SDK does not validate envelopes or normalize
+  sentinel values. The application stores the SDK call parameters so requests can be reproduced.
+
+The response shapes and seven-day chunk policy follow `AGENTS.md` and are exercised with fakes;
+reading these thin wrappers does **not** verify actual live response fields, API rate limits or
+available historical depth. No new schema decision is needed for this phase. Runtime ORM writes
+remain portable and compare raw JSON parameters in Python, avoiding Oracle CLOB equality.
+
+Typing uses narrow injectable interfaces around the SDK and `types-requests` for strict checks.
+The published SDK includes a `py.typed` marker, so no missing-import override is needed.
+Application `src/` continues to pass `mypy --strict`. Google docstring rules are enabled. The exact required module
+metadata layout has local `D205`/`D212` suppressions only at its closing quotes; function/class
+rules remain enabled. A tracked-file header test checks author, date, MIT license and description.
+
+Maintainer verification still required: real 14-day backfill on ADB, immediate repeat incremental
+runs with zero updates when provider data is stable, and `sync status`. Confirm real pagination,
+summary shapes, key discovery/token-cache behavior and permission mode on the maintainer's machine.
+Report counts, date ranges and sanitized status codes only; do not attach raw payloads or secrets.

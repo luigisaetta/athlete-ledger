@@ -1,4 +1,9 @@
-"""Smoke tests for the installed athlete-ledger-agent package."""
+"""
+Author: L. Saetta
+Date Last Modified: 2026-11-16
+License: MIT
+Description: Smoke tests for the installed athlete-ledger-agent package.
+"""  # noqa: D205, D212
 
 import subprocess
 
@@ -6,10 +11,12 @@ from athlete_ledger_agent import __version__
 
 
 def test_version() -> None:
+    """Verify version."""
     assert __version__ == "0.0.1"
 
 
 def test_console_entry_point() -> None:
+    """Verify console entry point."""
     result = subprocess.run(
         ["athlete-ledger-agent"], capture_output=True, text=True, check=True, timeout=10
     )
