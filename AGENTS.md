@@ -108,6 +108,9 @@ Keep `.env.example` in sync with the variables actually used. Planned names:
   - `ATHLETE_LEDGER_DB_WALLET_PASSWORD`: wallet password (required by thin mode for mTLS).
   - `ATHLETE_LEDGER_RO_DB_USER`, `ATHLETE_LEDGER_RO_DB_PASSWORD`: read-only user
     (`ATHLETE_LEDGER_RO`), consumed by the MCP server from Phase 2.
+  - `ATHLETE_LEDGER_DB_SCHEMA`: owner schema the read-only user reads (default `ATHLETE_LEDGER`).
+- `ATHLETE_LEDGER_MCP_INCLUDE_ACTIVITY_NAMES`: include activity names in MCP results (default
+  `false`).
 - `OCI_GENAI_BASE_URL`, `OCI_GENAI_API_KEY`, `OCI_GENAI_MODEL`, `OCI_GENAI_PROJECT_ID`
   (agent, Phase 4; the OCI Responses API needs a Generative AI project OCID).
 
@@ -123,8 +126,8 @@ and any open questions.
 |---|---|---|
 | 0. Foundation (done) | Workspace, tooling, local checks, `docs/reference/`, `.env.example` | All acceptance checks pass locally on an empty skeleton |
 | 1a. Ledger store (done) | `core`: settings, SQLAlchemy engine (SQLite + Oracle mTLS), portable JSON type, models, Alembic, Oracle bootstrap SQL, generated Oracle DDL, `db` CLI | Migrations green on SQLite; Oracle DDL generated and reviewed; maintainer applies bootstrap + migrations on ADB and `db check` passes |
-| **1b. Sync (current)** | `core`: Garmin access layer, normalization of the four data areas, `sync backfill --since`, incremental `sync run`, `sync status`, `sync coverage` (follow-up) | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
-| 2. MCP over stdio | Read-only tools on the DB | Works with MCP Inspector and a desktop client |
+| 1b. Sync (done) | `core`: Garmin access layer, normalization of the four data areas, `sync backfill --since`, incremental `sync run`, `sync status`, `sync coverage` (follow-up) | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
+| **2. MCP over stdio (current)** | Four read-only data tools on the DB (`ledger_status`, `list_activities`, `activity_totals`, `daily_wellness`) | Works with MCP Inspector and a desktop client |
 | 3. Streamable HTTP | Stateless 2026-07-28 transport + 2025 compatibility | Conformance tests pass |
 | 4. Agent | FastAPI `/chat` SSE, MCP client, OCI Responses tool loop | Answers questions on the four data areas citing dates and numbers |
 | 5. UI | Next.js chat with tool-call cards | End-to-end demo works |
@@ -285,7 +288,7 @@ Acceptance: local checks pass; `sync backfill` and `sync run` work against the f
 SQLite; the PR lists open questions and what the maintainer must verify with real data: a short
 backfill (e.g. 14 days) on ADB, a second `sync run` reporting zero updates, and `sync status`.
 
-### Phase 1b follow-up (current): sync coverage
+### Phase 1b follow-up (done): sync coverage
 
 Branch `phase-1b-sync-coverage`. Scope is the `core` package only; no schema changes, no provider
 calls. Problem: `sync_state.last_synced_date` is only a high-water mark, so a gap between two
@@ -322,6 +325,98 @@ tables are **not** a coverage source: a day without records is normal.
 
 Acceptance: local checks pass; the maintainer runs `sync coverage` on ADB after the Phase 1b
 real-data check.
+
+### Phase 2 tasks (current): MCP over stdio
+
+Branch `phase-2-mcp-stdio`. Scope: the `mcp-server` package, plus small read-only helpers in
+`core` only if they are reused by both. No schema changes, no provider calls, no HTTP transport
+(Phase 3). Decisions already taken (do not revisit): the server exposes **data, not analysis**;
+this first version has exactly the four tools below (summaries and comparisons are the agent's
+job and may be added later); it reads the database only, as the read-only user on Oracle.
+
+1. **Dependencies**: `mcp>=2.3,<3` (official SDK, latest 2.3.0 at the time of writing) and the
+   workspace package `athlete-ledger`. Before coding, read the installed SDK source and docs:
+   `MCPServer`, tool registration, tool annotations, structured output (`outputSchema` /
+   structured content), tool errors, and running over stdio. Record the resolved version and the
+   exact APIs used in `docs/reference/README.md`, closing the Phase 0 verification gap.
+
+2. **Database access (read-only)**:
+   - Oracle: connect with `ATHLETE_LEDGER_RO_DB_USER` / `ATHLETE_LEDGER_RO_DB_PASSWORD` (both
+     required; **never** fall back to the owner credentials) and the same DSN and wallet
+     variables. Unqualified model tables must resolve to the owner schema: run
+     `ALTER SESSION SET CURRENT_SCHEMA = <schema>` on each new connection (SQLAlchemy `connect`
+     event), with `<schema>` from a new setting `ATHLETE_LEDGER_DB_SCHEMA` (default
+     `ATHLETE_LEDGER`, validated as an unquoted identifier `^[A-Z][A-Z0-9_]{0,127}$` before use).
+     Use `pool_pre_ping=True` for the long-running process.
+   - SQLite: open the configured file **read-only** (`file:...?mode=ro` with `uri=true`); a
+     missing file is a configuration error, never created.
+   - New optional setting `ATHLETE_LEDGER_MCP_INCLUDE_ACTIVITY_NAMES` (bool, default `false`):
+     activity names can contain places or people and tool results reach the client's model.
+   - Add the new names to `.env.example` (empty values) and to *Configuration* in this file.
+   - Queries select only the needed columns of the normalized tables and `sync_state`; never
+     `raw_response.payload` or `params`. Reuse `athlete_ledger.coverage.sync_coverage`.
+
+3. **Tools** (all four): annotations `readOnlyHint=true`, `idempotentHint=true`,
+   `destructiveHint=false`, `openWorldHint=false`, plus a `title`. Pydantic result models so
+   each tool has an `outputSchema` and returns structured content (with a compact text
+   rendering if the SDK requires it). Descriptions are written for a language model: units,
+   meaning of `null`, local-time semantics, limits. Dates are ISO `YYYY-MM-DD`; ranges are
+   inclusive; `start > end`, malformed dates, and out-of-limit values return a tool error with
+   a clear message (no stack traces, no SQL). Stable ordering everywhere.
+   - `ledger_status()`: the server's local date; per dataset (`activities`, `sleep`, `hrv`,
+     `stress`): covered intervals and gaps (from `sync_coverage`), `last_synced_date`,
+     `last_run_at`, `last_status`, first and last date that has a record; the sports present in
+     `activity` with their activity counts. This tells the model which dates it can trust.
+   - `list_activities(start, end, sport=None, limit=50)`: `limit` 1–200. Activities whose local
+     start date is in the range, ordered by `start_time_local`, then `activity_id`. Fields:
+     `activity_id`, `start_time_local` (ISO, provider local wall time, no timezone), `sport`
+     (`activity_type`, `null` if unknown), `distance_km`, `duration_min`, `avg_hr_bpm`,
+     `calories_kcal`, and `activity_name` only when the setting is enabled (otherwise the key is
+     absent). Also `total_matching`, `truncated`, and the downloaded coverage of the range.
+   - `activity_totals(start, end, group_by)`: `group_by` is `week` (ISO week, key like
+     `2026-W46` plus the Monday date), `month` (`2026-11`), or `sport` (`unknown` for null).
+     Per group: `activity_count`, `distance_km`, `duration_h`, `calories_kcal`, and
+     `avg_hr_bpm` weighted by duration over activities that have both values. Sums skip
+     nulls; include, per group, how many activities lacked each value. Also overall totals and
+     the downloaded coverage of the range.
+   - `daily_wellness(start, end, areas=None)`: range at most 92 days; `areas` is any subset of
+     `sleep`, `hrv`, `stress` (default all). One row per calendar day in the range, **including
+     days without records**. Each area in a row has a `state`: `not_downloaded` (date outside
+     that dataset's coverage), `no_record` (downloaded, no row), or `ok` (values present; any
+     individual metric may still be `null`). Fields: sleep `sleep_min`, `deep_min`,
+     `light_min`, `rem_min`, `awake_min`, `nap_min`, `sleep_score`, `avg_hr_bpm`,
+     `avg_respiration_brpm`; HRV `last_night_avg_ms`, `weekly_avg_ms`,
+     `last_night_5min_high_ms`, `baseline_low_ms`, `baseline_upper_ms`, `status`; stress
+     `overall_stress_level` (0–100), `rest_min`, `low_min`, `medium_min`, `high_min`.
+   Rounding: km to 2 decimals, minutes to 1, hours to 2, averages to 1.
+
+4. **Server and CLI**: `athlete-ledger-mcp` runs the server over stdio (the only transport in
+   this phase), with `--env-file PATH` (passed to the settings; default: `.env` in the current
+   directory if present), because desktop clients start the process from an arbitrary directory.
+   **stdout carries only the protocol**: no banner, no prints. Logs go to stderr at `WARNING` by
+   default and never contain data values, SQL, or credentials. Configuration or connectivity
+   failures at startup exit non-zero with the sanitized Phase 1a diagnostics on stderr; database
+   failures during a call become tool errors with only an `ORA-`/`DPY-` code. Target protocol
+   2026-07-28 as supported by the SDK; do not hand-roll protocol handling.
+
+5. **Tests** (synthetic SQLite ledger only): exercise the server through the SDK's in-memory
+   client if it has one (otherwise call the registered tools directly) plus one stdio
+   subprocess smoke test. Cover: tool list with the four tools, annotations and output
+   schemas; each tool's output on a seeded ledger with a coverage gap; the three wellness
+   states; ISO week and month keys across a year boundary; duration-weighted HR; null
+   handling; limit, truncation and the 92-day maximum; invalid input errors; activity names
+   absent by default and present when enabled; SQLite read-only (a write attempt fails, a
+   missing file is not created); Oracle read-only engine settings and the `CURRENT_SCHEMA`
+   hook built without connecting (owner credentials ignored); stdout contains only protocol
+   messages; no fixture values in logs.
+
+6. **Docs**: README section "MCP server": what each tool returns, configuration for a desktop
+   client (command, args with `--env-file`, no secrets in the client config), running the MCP
+   Inspector against it, the read-only user on Oracle, and a privacy note: tool results are
+   sent to whatever model the client uses.
+
+Acceptance: local checks pass; the maintainer connects the MCP Inspector and a desktop client,
+on SQLite and on ADB as `ATHLETE_LEDGER_RO`, and asks questions on real data.
 
 ## Coding conventions
 
