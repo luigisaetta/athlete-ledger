@@ -128,7 +128,8 @@ def normalize(dataset: str, payload: Any, start: date, end: date) -> NormalizedB
         Rows with normalized units and the skipped-placeholder count.
 
     Raises:
-        UnexpectedResponseError: If dates, identifiers or record shapes are invalid.
+        UnexpectedResponseError: If dates, identifiers or record shapes are invalid,
+            or a local activity timestamp is malformed or carries a timezone.
     """
     batch = NormalizedBatch([])
     seen: set[date | int] = set()
@@ -141,15 +142,15 @@ def normalize(dataset: str, payload: Any, start: date, end: date) -> NormalizedB
             seen.add(key)
             stamp = record.get("startTimeLocal")
             try:
-                local = (
-                    datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S")
-                    if isinstance(stamp, str)
-                    else None
-                )
+                local = datetime.fromisoformat(stamp) if isinstance(stamp, str) else None
             except ValueError:
                 raise UnexpectedResponseError(
                     "GET search_activities: invalid local timestamp."
                 ) from None
+            if local is not None and local.tzinfo is not None:
+                raise UnexpectedResponseError(
+                    "GET search_activities: local timestamp must not carry a timezone."
+                )
             row = {
                 "activity_id": key,
                 "start_time_local": local,

@@ -218,3 +218,44 @@ def test_duplicate_dates_are_fatal_but_null_placeholders_skip(dataset):
     payload = {"hrvSummaries": rows} if dataset == "hrv" else rows
     batch = norm(dataset, payload)
     assert batch.rows == [] and batch.placeholders == 2
+
+
+@pytest.mark.parametrize(
+    ("stamp", "microsecond"),
+    [
+        ("2026-01-02 08:10:20", 0),
+        ("2026-01-02T08:10:20", 0),
+        ("2026-01-02 08:10:20.123456", 123456),
+        ("2026-01-02T08:10:20.123", 123000),
+    ],
+)
+def test_activity_local_iso_datetime_forms(stamp, microsecond):
+    """Accept space/T separators and preserve fractional seconds in naive local time."""
+    row = norm("activities", [{"activityId": 7, "startTimeLocal": stamp}]).rows[0]
+    assert row["start_time_local"] == datetime(2026, 1, 2, 8, 10, 20, microsecond)
+    assert row["start_time_local"].tzinfo is None
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "2026-01-02T08:10:20Z",
+        "2026-01-02T08:10:20+00:00",
+        "2026-01-02 08:10:20.123456+02:00",
+        "2026-01-02T08:10:20-05:30",
+    ],
+)
+def test_activity_local_timestamp_rejects_timezones(stamp):
+    """Reject timezone-bearing timestamps without exposing their original values."""
+    with pytest.raises(UnexpectedResponseError, match="must not carry a timezone") as error:
+        norm("activities", [{"activityId": 7, "startTimeLocal": stamp}])
+    assert stamp not in str(error.value)
+    assert "search_activities" in str(error.value)
+
+
+def test_activity_local_timestamp_parse_failure_is_sanitized():
+    """Keep invalid timestamp text out of unexpected-response diagnostics."""
+    marker = "SYNTHETIC-PRIVATE-TIMESTAMP"
+    with pytest.raises(UnexpectedResponseError, match="invalid local timestamp") as error:
+        norm("activities", [{"activityId": 7, "startTimeLocal": marker}])
+    assert marker not in str(error.value)

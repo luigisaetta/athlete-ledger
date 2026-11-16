@@ -266,6 +266,10 @@ values change get a new update timestamp and source-response reference. Records 
 later response are **not deleted**; provider-side deletions are outside this MVP. JSON documents
 that are not valid serializable JSON are rejected rather than altering their raw content.
 
+Activity `startTimeLocal` accepts ISO datetime strings with a space or `T` separator and optional
+fractional seconds. It remains provider-local naive time: timestamps containing a timezone offset
+or `Z` are rejected rather than silently converted or stripped of their timezone.
+
 Output uses the terminal banner and `[OK]`/`[INFO]` helpers. Per dataset it shows chunk and request
 counts, raw stored/unchanged counts, normalized rows inserted/updated/unchanged, and skipped
 placeholder counts. Request counts include data-request retries and terminating empty activity
