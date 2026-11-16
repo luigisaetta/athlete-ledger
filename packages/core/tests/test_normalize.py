@@ -185,9 +185,32 @@ def test_activity_mapping_preserves_local_wall_time_and_zero():
         "duration_s": 12.5,
         "avg_hr_bpm": None,
         "calories_kcal": None,
+        **dict.fromkeys(
+            (
+                "aerobic_training_effect",
+                "anaerobic_training_effect",
+                "training_effect_label",
+                "training_load",
+                "training_stress_score",
+                "intensity_factor",
+                "normalized_power_w",
+                "elevation_gain_m",
+                "elevation_loss_m",
+                "max_hr_bpm",
+                "avg_speed_mps",
+                "moving_duration_s",
+                "moderate_intensity_min",
+                "vigorous_intensity_min",
+                "hr_zone_1_s",
+                "hr_zone_2_s",
+                "hr_zone_3_s",
+                "hr_zone_4_s",
+                "hr_zone_5_s",
+            )
+        ),
     }
     assert row["start_time_local"].tzinfo is None
-    assert len(norm("activities", payload * 2).rows) == 1
+    assert len(norm("activities", payload * 2).rows) == 2
 
 
 @pytest.mark.parametrize("identifier", [None, True, -1, "private", 12.5])

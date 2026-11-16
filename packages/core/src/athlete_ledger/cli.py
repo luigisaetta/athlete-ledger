@@ -18,7 +18,7 @@ from athlete_ledger.console import banner, info, ok
 from athlete_ledger.db import create_db_engine
 from athlete_ledger.db.migrate import check_database, offline_sql, upgrade
 from athlete_ledger.errors import LedgerError, database_error_code
-from athlete_ledger.settings import Settings, validation_environment_names
+from athlete_ledger.settings import DatabaseSettings, Settings, validation_environment_names
 from athlete_ledger.sync_cli import add_sync_commands, run_sync
 from athlete_ledger.sync_types import ProviderError
 
@@ -68,7 +68,11 @@ def run(
                 if args.command == "sync"
                 else ("Database upgrade" if args.db_command == "upgrade" else "Database check")
             )
-        settings = Settings()
+        settings: DatabaseSettings
+        if args.command == "sync" and args.sync_command == "rebuild":
+            settings = DatabaseSettings()
+        else:
+            settings = Settings()
         if require_oracle and settings.backend != "oracle":
             print("Invalid database settings: ATHLETE_LEDGER_DB_DSN.", file=sys.stderr)
             return 1

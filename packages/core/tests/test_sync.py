@@ -502,3 +502,80 @@ def test_older_backfill_preserves_progress_and_incremental_window(engine):
     assert following[0].counts.inserted == following[0].counts.updated == 0
     with Session(engine) as session:
         assert session.get(SyncState, (PROVIDER, "sleep")).last_synced_date == NOW.date()
+
+
+def test_later_activity_page_overrides_earlier_values(engine):
+    """Apply every stored page in order so later activity values and provenance win."""
+
+    class UpdatedPages(FakeProvider):
+        """Return a repeated activity with updated metrics and one newly discovered activity."""
+
+        def responses(self, dataset, start, end):
+            """Yield valid overlapping synthetic pages without bypassing pagination progress.
+
+            Args:
+                dataset: Activities dataset supplying the fixed endpoint name.
+                start: Inclusive chunk start, unused by these synthetic records.
+                end: Inclusive chunk end, unused by these synthetic records.
+
+            Yields:
+                Two pages where activity 1 changes and activity 2 makes progress.
+            """
+            self.request_count += 2
+            yield Response(
+                ENDPOINTS[dataset],
+                {"start": 0, "limit": 100},
+                [
+                    {"activityId": 1, "distance": 1000, "aerobicTrainingEffect": 2.1},
+                ],
+            )
+            yield Response(
+                ENDPOINTS[dataset],
+                {"start": 1, "limit": 100},
+                [
+                    {"activityId": 1, "distance": 2000, "aerobicTrainingEffect": 3.2},
+                    {"activityId": 2, "distance": 0},
+                ],
+            )
+
+    result = backfill(engine, UpdatedPages(), days=1, datasets=["activities"])[0]
+    assert not result.error
+    assert result.counts.inserted == 2 and result.counts.updated == 1
+    with Session(engine) as session:
+        record = session.get(Activity, (PROVIDER, 1))
+        assert record.distance_m == 2000 and record.aerobic_training_effect == 3.2
+        assert record.source_response_id == session.scalar(select(func.max(RawResponse.id)))
+        assert count(session, Activity) == 2
+
+
+def test_later_duplicate_within_one_response_is_applied(engine):
+    """Use the same last-applied rule for repeated IDs inside one stored response."""
+
+    class RepeatedRecord(FakeProvider):
+        """Supply one raw page containing two versions of the same synthetic activity."""
+
+        def responses(self, dataset, start, end):
+            """Yield an ordered pair of records whose second metric must win.
+
+            Args:
+                dataset: Activities dataset whose endpoint labels the response.
+                start: Inclusive chunk start, unused by the fixed synthetic records.
+                end: Inclusive chunk end, unused by the fixed synthetic records.
+
+            Yields:
+                One response with activity 1 repeated in provider order.
+            """
+            self.request_count += 1
+            yield Response(
+                ENDPOINTS[dataset],
+                {"start": 0},
+                [
+                    {"activityId": 1, "trainingStressScore": 10},
+                    {"activityId": 1, "trainingStressScore": 20},
+                ],
+            )
+
+    result = backfill(engine, RepeatedRecord(), days=1, datasets=["activities"])[0]
+    assert not result.error and result.counts.inserted == 1 and result.counts.updated == 1
+    with Session(engine) as session:
+        assert session.get(Activity, (PROVIDER, 1)).training_stress_score == 20

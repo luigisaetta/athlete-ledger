@@ -15,8 +15,10 @@ from sqlalchemy import Engine
 
 from athlete_ledger.console import info, ok
 from athlete_ledger.coverage import sync_coverage
+from athlete_ledger.errors import ConfigurationError
 from athlete_ledger.providers.garmin_connect import PersonalProvider
-from athlete_ledger.settings import Settings
+from athlete_ledger.rebuild import rebuild
+from athlete_ledger.settings import DatabaseSettings, Settings
 from athlete_ledger.sync import sync_status, synchronize
 from athlete_ledger.sync_types import DATASETS
 
@@ -72,22 +74,27 @@ def add_sync_commands(commands: Any) -> None:
     backfill.add_argument("--until", type=_date)
     incremental = subcommands.add_parser("run", help="Refresh the last three synced days onward")
     coverage = subcommands.add_parser("coverage", help="Show downloaded intervals and gaps")
-    for command in (backfill, incremental, coverage):
+    rebuild_parser = subcommands.add_parser(
+        "rebuild", help="Rebuild normalized rows from stored raw responses"
+    )
+    for command in (backfill, incremental, coverage, rebuild_parser):
         command.add_argument("--dataset", nargs="+", action="extend", type=_dataset, metavar="NAME")
     subcommands.add_parser("status", help="Show progress without accessing the provider")
 
 
-def run_sync(args: argparse.Namespace, engine: Engine, settings: Settings) -> int:
+def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSettings) -> int:
     """Run selected datasets and report counts, dates and safe errors only.
 
     Args:
         args: Parsed command options.
         engine: Configured ledger database.
-        settings: Configuration containing an optional secret API key.
+        settings: Database configuration; provider-enabled Settings only for network sync.
 
     Returns:
         Zero only if every requested dataset completed.
     """
+    if args.sync_command == "rebuild":
+        return _run_rebuild(engine, args.dataset or DATASETS)
     if args.sync_command == "coverage":
         _print_coverage(engine, args.dataset or DATASETS, date.today())
         return 0
@@ -110,6 +117,8 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: Settings) -> in
     logger.setLevel(logging.WARNING)
     logger.handlers = [logging.NullHandler()]
     logger.propagate = False
+    if not isinstance(settings, Settings):
+        raise ConfigurationError("Provider sync requires provider-enabled settings.")
     provider = PersonalProvider(settings.personal_api_key)
     failed = False
     try:
@@ -168,3 +177,30 @@ def _print_coverage(engine: Engine, datasets: tuple[str, ...] | list[str], today
         if last < today:
             start = last + timedelta(days=1)
             info(f"{dataset}: tail from={start} to={today} days={(today - last).days}")
+
+
+def _run_rebuild(engine: Engine, datasets: tuple[str, ...] | list[str]) -> int:
+    """Rebuild selected datasets and print only safe counters or endpoint/raw-ID context.
+
+    Args:
+        engine: Owner engine for reading raw rows and writing normalized tables.
+        datasets: Supported datasets to replay in the supplied order.
+
+    Returns:
+        Zero only if every selected dataset committed its normalized changes.
+    """
+    failed = False
+    for result in rebuild(engine, datasets):
+        counts = result.counts
+        message = (
+            f"{result.dataset}: raw_read={result.raw_read} empty_skipped={result.empty_skipped} "
+            f"rows_inserted={counts.inserted} rows_updated={counts.updated} "
+            f"rows_unchanged={counts.unchanged} placeholders_skipped={counts.placeholders}"
+        )
+        if result.error:
+            failed = True
+            info(message)
+            print(result.error, file=sys.stderr)
+        else:
+            ok(message)
+    return 1 if failed else 0

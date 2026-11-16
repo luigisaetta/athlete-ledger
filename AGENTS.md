@@ -418,7 +418,7 @@ job and may be added later); it reads the database only, as the read-only user o
 Acceptance: local checks pass; the maintainer connects the MCP Inspector and a desktop client,
 on SQLite and on ADB as `ATHLETE_LEDGER_RO`, and asks questions on real data.
 
-### Activity training metrics, part 1 (current): schema migration
+### Activity training metrics, part 1 (done): schema migration
 
 Branch `activity-metrics-schema`. Scope: the `core` database layer only. This patch adds columns
 to `activity`; it does **not** change normalization, sync, or the MCP server. The new columns stay
@@ -486,6 +486,87 @@ Use the same SQLAlchemy type style as the existing metric columns (`Mapped[float
 
 Acceptance: local checks pass; the maintainer upgrades ADB as the owner, `db check` shows
 `0002_activity_training_metrics`, and `sync run` and the MCP server keep working.
+
+### Activity training metrics, part 2 (current): mapping and rebuild
+
+Branch `activity-metrics-rebuild`. Scope: the `core` package only (normalization, storage, sync
+CLI). No schema changes, no MCP changes (part 3), no provider calls in the new command. Decisions
+already taken (do not revisit): normalized tables are derived from `raw_response`; the new
+`sync rebuild` command re-derives them from stored raw responses so a mapping change never needs
+a new download; the upsert logic is shared between sync and rebuild, not duplicated.
+
+1. **Mapping** (`athlete_ledger/normalize/garmin_connect.py`, activities only): fill the 19
+   columns added by `0002_activity_training_metrics` from the provider record, keeping the
+   existing value rules (missing, non-numeric, boolean, non-finite, or negative → NULL; zero is
+   valid; integer columns round integral values):
+
+   | Column | Provider field | Extra rule |
+   |---|---|---|
+   | `aerobic_training_effect`, `anaerobic_training_effect` | `aerobicTrainingEffect`, `anaerobicTrainingEffect` | outside 0.0–5.0 → NULL |
+   | `training_effect_label` | `trainingEffectLabel` | string only; empty or longer than 64 characters → NULL (never truncate) |
+   | `training_load` | `activityTrainingLoad` | |
+   | `training_stress_score`, `intensity_factor`, `normalized_power_w` | `trainingStressScore`, `intensityFactor`, `normPower` | |
+   | `elevation_gain_m`, `elevation_loss_m` | `elevationGain`, `elevationLoss` | |
+   | `max_hr_bpm` | `maxHR` | |
+   | `avg_speed_mps` | `averageSpeed` | metres per second, as provided |
+   | `moving_duration_s` | `movingDuration` | |
+   | `moderate_intensity_min`, `vigorous_intensity_min` | `moderateIntensityMinutes`, `vigorousIntensityMinutes` | integer |
+   | `hr_zone_1_s` … `hr_zone_5_s` | `hrTimeInZone_1` … `hrTimeInZone_5` | seconds |
+
+   Never read or map GPS coordinates, `locationName`, owner identity, profile image URLs, or
+   device fields. Sleep, HRV and stress mappings are unchanged.
+
+2. **Shared upsert** (`athlete_ledger/storage.py`): extract the "load by primary key, insert if
+   absent, otherwise assign only changed columns" block of `store_response` into one function
+   used by both sync and rebuild. Behaviour of `store_response` must stay identical (existing
+   tests unchanged). `updated_at` and `source_response_id` change only when a value changes.
+
+3. **Rebuild** (e.g. `athlete_ledger/rebuild.py`): for each selected dataset, read its
+   `raw_response` rows (`provider = garmin_connect`, the dataset's endpoint) in ascending `id`
+   order, i.e. fetch order, and normalize each payload with its stored `range_start`/`range_end`.
+   Apply every non-empty raw response through the shared upsert in ascending id order:
+   **last applied wins**. A record takes the values of the last raw response that contains it;
+   later occurrences within a response also win. Sync applies every stored page with the same
+   rule: no cross-page or within-chunk deduplication. Keep the provider's pagination no-progress
+   check unchanged. Never infer chunk or run boundaries from ranges, offsets or empty pages.
+   A second rebuild must report zero net inserts and updates. Rules:
+   - read-only on `raw_response` and `sync_state`; never insert, update, or delete them;
+   - never delete normalized rows (records absent from later raw responses stay, as in sync);
+   - empty raw responses (`is_empty`) are skipped; a raw row with a null range, or a payload that
+     fails validation, fails that dataset with a sanitized message naming the endpoint and the
+     raw row `id` only;
+   - one transaction per dataset: on failure roll back that dataset, continue with the others,
+     exit non-zero;
+   - stream raw rows (do not load every payload into memory at once).
+
+4. **CLI**: `athlete-ledger sync rebuild [--dataset NAME ...]` (default all four). Like
+   `sync status` and `sync coverage`, it reads only the database: no provider, no API key
+   discovery, no network. Use the owner connection (it writes normalized tables). Output per
+   dataset, counts only: raw responses read, empty skipped, rows inserted, updated, unchanged,
+   placeholders skipped. Never print values, names, or payloads.
+
+5. **Tests** (SQLite, synthetic data only):
+   - mapping: every new field, including missing, negative, zero, boolean, non-numeric string,
+     training effect above 5, label empty/too long, integral and non-integral intensity minutes;
+     the normalized activity row contains no key for any excluded field;
+   - rebuild fills the new columns of existing activities from stored raw responses, with a
+     guard proving no provider is constructed and no API key is read;
+   - a second rebuild reports zero inserts and zero updates;
+   - two raw responses containing the same activity: the later `id` wins;
+   - sleep/HRV/stress rebuild on unchanged mappings reports zero updates;
+   - a corrupt raw payload in one dataset rolls back only that dataset, other datasets succeed,
+     the exit code is non-zero, and the error shows only endpoint and raw id;
+   - `raw_response` and `sync_state` are unchanged after a rebuild;
+   - `sync run` on new synthetic raw data fills the new columns;
+   - CLI output contains no fixture values.
+
+6. **Docs**: README "Sync": what `sync rebuild` does, when to run it (after an upgrade that
+   changes the mapping), that it needs no API key and makes no downloads, and that it must not run
+   at the same time as a sync.
+
+Acceptance: local checks pass; the maintainer runs `athlete-ledger sync rebuild` on ADB as the
+owner, then a second rebuild reporting zero updates; the new activity columns are populated
+(checked by counts only).
 
 ## Coding conventions
 

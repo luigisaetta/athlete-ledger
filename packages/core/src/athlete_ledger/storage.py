@@ -17,10 +17,12 @@ from sqlalchemy.orm import Session
 
 from athlete_ledger.db.models import Activity, DailyHRV, DailySleep, DailyStress, RawResponse
 from athlete_ledger.db.types import JSONValue
-from athlete_ledger.normalize.garmin_connect import activity_id, normalize, records
+from athlete_ledger.normalize.garmin_connect import normalize, records
 from athlete_ledger.sync_types import PROVIDER, ProviderError, Response
 
 NormalizedRecord = Activity | DailySleep | DailyHRV | DailyStress
+NormalizedKey = tuple[str, int | date]
+UpsertCache = dict[NormalizedKey, NormalizedRecord | None]
 MODELS: dict[str, type[NormalizedRecord]] = {
     "activities": Activity,
     "sleep": DailySleep,
@@ -76,7 +78,6 @@ def store_response(
     sdk_version: str,
     clock: Callable[[], datetime],
     counts: Counts,
-    seen_activities: set[int],
 ) -> None:
     """Persist new raw content before deriving and comparing normalized rows.
 
@@ -89,17 +90,11 @@ def store_response(
         sdk_version: Installed provider SDK version.
         clock: Aware timestamp source.
         counts: Counts local to this transaction.
-        seen_activities: Activity keys already encountered in this chunk.
 
     Raises:
         ProviderError: If payload serialization is invalid.
     """
     page = records(dataset, response.payload)
-    allowed_ids: set[int] = set()
-    if dataset == "activities":
-        page_ids = {activity_id(record) for record in page}
-        allowed_ids = page_ids - seen_activities
-        seen_activities.update(page_ids)
     try:
         digest = content_hash(response.payload)
     except (ValueError, TypeError, OverflowError):
@@ -135,24 +130,54 @@ def store_response(
     counts.raw_stored += 1
     batch = normalize(dataset, response.payload, start, end)
     counts.placeholders += batch.placeholders
-    model = MODELS[dataset]
     for row in batch.rows:
-        identifier = row["activity_id"] if dataset == "activities" else row["calendar_date"]
-        if dataset == "activities" and identifier not in allowed_ids:
-            continue
-        existing = cast(NormalizedRecord | None, session.get(model, (PROVIDER, identifier)))
-        if existing is None:
-            session.add(
-                model(**row, provider=PROVIDER, source_response_id=raw.id, updated_at=clock())
-            )
-            counts.inserted += 1
+        upsert_row(session, dataset, row, raw.id, clock, counts)
+
+
+def upsert_row(
+    session: Session,
+    dataset: str,
+    row: dict[str, Any],
+    source_response_id: int,
+    clock: Callable[[], datetime],
+    counts: Counts,
+    cache: UpsertCache | None = None,
+) -> None:
+    """Insert a normalized row or assign only changed values without committing.
+
+    Args:
+        session: Caller-owned transaction for normalized records.
+        dataset: Supported dataset selecting the normalized ORM model and primary key.
+        row: Normalizer-produced values, including the activity ID or calendar date.
+        source_response_id: Stored raw row that produced these values.
+        clock: Aware timestamp source, called only for an inserted or changed row.
+        counts: Caller-owned counters incremented for insertion, change or no change.
+        cache: Optional identity cache for deferred-flush replay, including pending
+            inserts; None preserves ordinary sync session lookups.
+    """
+    model = MODELS[dataset]
+    identifier = row["activity_id"] if dataset == "activities" else row["calendar_date"]
+    cache_key = (dataset, identifier)
+    existing = (
+        cache[cache_key]
+        if cache is not None and cache_key in cache
+        else cast(NormalizedRecord | None, session.get(model, (PROVIDER, identifier)))
+    )
+    if existing is None:
+        existing = model(
+            **row, provider=PROVIDER, source_response_id=source_response_id, updated_at=clock()
+        )
+        session.add(existing)
+        counts.inserted += 1
+    else:
+        changed = {key: value for key, value in row.items() if getattr(existing, key) != value}
+        if changed:
+            for key, value in changed.items():
+                setattr(existing, key, value)
+            existing.source_response_id = source_response_id
+            existing.updated_at = clock()
+            counts.updated += 1
         else:
-            changed = {key: value for key, value in row.items() if getattr(existing, key) != value}
-            if changed:
-                for key, value in changed.items():
-                    setattr(existing, key, value)
-                existing.source_response_id = raw.id
-                existing.updated_at = clock()
-                counts.updated += 1
-            else:
-                counts.unchanged += 1
+            counts.unchanged += 1
+    if cache is not None:
+        cache[cache_key] = existing

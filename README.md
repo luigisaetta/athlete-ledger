@@ -191,8 +191,9 @@ On ADB, `python scripts/create_tables.py` performs the same upgrade/check sequen
 and existing databases reach `0002_activity_training_metrics`; no separate installation path is
 needed. This revision adds 19 nullable activity training metric columns, without changing existing
 values or reader grants. The existing table-level SELECT grant covers the new columns. They stay
-NULL until the next patch adds normalization/rebuilding from saved raw responses; this patch does
-not populate them or expose them through MCP. Sync and the existing MCP tools remain unchanged.
+NULL immediately after the schema upgrade. Run `sync rebuild` to populate them from saved raw
+responses using the current mapping; new downloads also fill them during normal sync. The existing
+MCP tools do not expose these new metrics yet (part 3).
 
 Generate the reviewable Oracle schema from Alembic without connecting:
 
@@ -263,6 +264,40 @@ days plus any newer days through today. If no committed date exists, the command
 backfill is needed. `sync status` reads only dataset progress dates, run timestamps and status;
 it does not discover credentials, construct a provider or contact the API.
 
+Rebuild normalized records after upgrading to a version with changed field mappings:
+
+```sh
+athlete-ledger sync rebuild
+athlete-ledger sync rebuild --dataset activities
+```
+
+`sync rebuild` uses the **owner** connection and reads only the existing database; it requires
+no provider API key, constructs no provider and makes no downloads. It applies every non-empty
+raw response in ascending `raw_response.id` order through the same upsert used by sync. The last
+applied values win; it does not infer download/chunk boundaries from ranges, offsets or empty
+pages. This fills the 19 activity training metric columns from `0002_activity_training_metrics`
+when those fields are present in the stored provider summaries. Missing/invalid/negative values
+remain NULL, zero is valid, training effects are limited to 0–5, and labels must be non-empty
+strings of at most 64 characters (never truncated). Units stay as stored: speed in m/s, moving
+and HR-zone durations in seconds, intensity minutes rounded to integers. Location, owner and
+device fields are not mapped. Sleep, HRV and stress mappings are unchanged.
+
+Replay is one transaction per dataset. Raw metadata is streamed and only one payload is fetched
+at a time; the transaction retains normalized records and their initial scalar values. Every raw
+occurrence is applied in order, with writes deferred until the final comparison. Row counters are
+**net changes from transaction entry**, rather than historical intermediate transitions. Repeating
+rebuild against unchanged raw history and mappings reports zero inserts/updates and preserves
+update timestamps and provenance. The command never modifies `raw_response` or `sync_state`, and
+never deletes normalized rows; records absent from later responses are retained.
+
+Per dataset, output contains counts for `raw_read`, `empty_skipped`, `rows_inserted`,
+`rows_updated`, `rows_unchanged` and `placeholders_skipped`. Empty responses are skipped. Null or
+reversed stored ranges, invalid JSON or normalization failures roll back that dataset, continue
+the remaining datasets and return nonzero. Failure diagnostics contain only the endpoint and
+raw row ID; no payload, values, names, SQL or exception text. Failed-dataset row counters are
+zero (rolled back), while raw/empty counts describe attempted reads. **Run only one sync or
+rebuild process at a time for a database.** A rebuild does not change sync progress or coverage.
+
 Inspect the downloaded date coverage without contacting the API. Like the other sync commands,
 it shows the standard banner in an interactive terminal; redirected output omits the banner:
 
@@ -302,8 +337,10 @@ API when you choose to run it. After the Phase 1b real-data checks, verify `sync
 and confirm that the downloaded ranges, any internal gaps and the unsynced tail match your runs.
 
 Requests use inclusive windows of at most seven days. Activities are paged with limit 100 through
-an empty terminating page, deduplicating activity IDs and rejecting pagination that makes no
-progress. Every chunk commits raw responses, normalized rows and state together. On failure, that
+an empty terminating page; the provider rejects pagination that makes no progress. Both sync
+and rebuild use **last applied wins** for normalized values: each stored page is applied in order,
+and a later occurrence of the same activity overrides earlier values, including repetitions
+inside a single response. No cross-page or within-chunk first-occurrence filter is used. Every chunk commits raw responses, normalized rows and state together. On failure, that
 chunk is rolled back, previous chunks remain committed, and a separate transaction records
 `failed` without advancing its last committed date. Other datasets continue; any failure produces
 a nonzero exit code. Older backfills preserve the later stored progress date, so they do not
