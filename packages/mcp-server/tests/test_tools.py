@@ -92,7 +92,19 @@ async def test_activity_order_limit_units_and_coverage(server) -> None:
     assert data["total_matching"] == 4 and data["truncated"] is True
     first, second = data["activities"]
     assert [first["activity_id"], second["activity_id"]] == [10, 20]
-    assert first == {
+    legacy = {
+        key: first[key]
+        for key in (
+            "activity_id",
+            "start_time_local",
+            "sport",
+            "distance_km",
+            "duration_min",
+            "avg_hr_bpm",
+            "calories_kcal",
+        )
+    }
+    assert legacy == {
         "activity_id": 10,
         "start_time_local": "2020-12-31T08:00:00",
         "sport": "running",
@@ -152,7 +164,27 @@ async def test_totals_year_boundary_null_counts_and_weighted_hr(server, group_by
             )
         ).structured_content
     assert [group["key"] for group in data["groups"]] == keys
-    assert data["overall"] == {
+    overall = data["overall"]
+    legacy = {
+        key: overall[key]
+        for key in (
+            "activity_count",
+            "distance_km",
+            "duration_h",
+            "calories_kcal",
+            "avg_hr_bpm",
+        )
+    }
+    legacy["missing"] = {
+        key: overall["missing"][key]
+        for key in (
+            "distance",
+            "duration",
+            "calories",
+            "avg_hr",
+        )
+    }
+    assert legacy == {
         "activity_count": 4,
         "distance_km": 3,
         "duration_h": 0.1,

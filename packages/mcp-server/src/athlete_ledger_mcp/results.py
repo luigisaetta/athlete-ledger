@@ -171,6 +171,37 @@ class MissingValues(BaseModel):
     duration: int
     calories: int
     avg_hr: int
+    training_load: int = Field(
+        description="Count of activities missing provider training-load units."
+    )
+    training_stress_score: int = Field(description="Count of activities missing TSS points.")
+    moving_duration: int = Field(
+        description="Count of activities missing moving duration in seconds."
+    )
+    elevation_gain: int = Field(description="Count of activities missing elevation gain in metres.")
+    hr_zones: int = Field(
+        description="Count of activities missing all five zone durations in seconds."
+    )
+
+
+class HeartRateZoneHours(BaseModel):
+    """Plain per-zone sums converted from stored seconds to hours."""
+
+    zone_1: float | None = Field(
+        description="Zone 1 time sum in hours, 2 decimals; null if all missing."
+    )
+    zone_2: float | None = Field(
+        description="Zone 2 time sum in hours, 2 decimals; null if all missing."
+    )
+    zone_3: float | None = Field(
+        description="Zone 3 time sum in hours, 2 decimals; null if all missing."
+    )
+    zone_4: float | None = Field(
+        description="Zone 4 time sum in hours, 2 decimals; null if all missing."
+    )
+    zone_5: float | None = Field(
+        description="Zone 5 time sum in hours, 2 decimals; null if all missing."
+    )
 
 
 class ActivityAggregate(BaseModel):
@@ -181,6 +212,24 @@ class ActivityAggregate(BaseModel):
     duration_h: float | None
     calories_kcal: float | None
     avg_hr_bpm: float | None
+    training_load: float | None = Field(
+        description="Provider training-load units sum, 1 decimal; null if all missing."
+    )
+    training_stress_score: float | None = Field(
+        description="Training stress sum in TSS points, 1 decimal; null if all missing."
+    )
+    moving_duration_h: float | None = Field(
+        description="Moving duration sum in hours, 2 decimals; null if all missing."
+    )
+    elevation_gain_m: float | None = Field(
+        description="Elevation gain sum in metres, 1 decimal; null if all missing."
+    )
+    intensity_minutes: IntensityMinutes = Field(
+        description="Plain sums of integer minutes; always present, all-missing members null."
+    )
+    hr_zone_h: HeartRateZoneHours = Field(
+        description="Plain zone-time sums in hours, 2 decimals; always present, members nullable."
+    )
     missing: MissingValues
 
 
