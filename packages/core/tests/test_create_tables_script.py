@@ -90,3 +90,48 @@ def test_script_help_does_not_load_settings_or_connect() -> None:
             runpy.run_path(str(SCRIPT), run_name="__main__")
     assert error.value.code == 0
     dispatch.assert_not_called()
+
+
+def test_setup_script_reaches_current_head_on_fresh_sqlite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Exercise the real setup sequence on SQLite, adapting only its Oracle-only launch guard."""
+    from collections.abc import Sequence
+
+    from athlete_ledger.db.migrate import check_database
+    from sqlalchemy import create_engine
+
+    path = tmp_path / "fresh-setup.db"
+    assert not path.exists()
+    monkeypatch.setenv("ATHLETE_LEDGER_DB_URL", f"sqlite:///{path}")
+    monkeypatch.setattr("sys.argv", [str(SCRIPT)])
+    calls: list[tuple[str, ...]] = []
+
+    def sqlite_dispatch(argv: Sequence[str], *, require_oracle: bool, show_banner: bool) -> int:
+        """Run the unchanged CLI using the isolated SQLite configuration for this test.
+
+        Args:
+            argv: Upgrade/check arguments emitted by the production setup script.
+            require_oracle: Production guard, asserted here but bypassed for SQLite-only testing.
+            show_banner: Whether to emit the CLI banner; passed through unchanged.
+
+        Returns:
+            The actual CLI exit status after executing migrations or checking the database.
+        """
+        assert require_oracle is True
+        calls.append(tuple(argv))
+        return run(argv, show_banner=show_banner)
+
+    with patch("athlete_ledger.cli.run", side_effect=sqlite_dispatch):
+        with pytest.raises(SystemExit) as result:
+            runpy.run_path(str(SCRIPT), run_name="__main__")
+    assert result.value.code == 0
+    assert calls == [("db", "upgrade"), ("db", "check")]
+    output = capsys.readouterr()
+    assert output.err == ""
+    assert "Alembic revision: 0002_activity_training_metrics" in output.out
+    engine = create_engine(f"sqlite:///{path}")
+    try:
+        assert check_database(engine).revision == "0002_activity_training_metrics"
+    finally:
+        engine.dispose()
