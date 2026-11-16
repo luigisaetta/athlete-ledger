@@ -123,7 +123,7 @@ and any open questions.
 |---|---|---|
 | 0. Foundation (done) | Workspace, tooling, local checks, `docs/reference/`, `.env.example` | All acceptance checks pass locally on an empty skeleton |
 | 1a. Ledger store (done) | `core`: settings, SQLAlchemy engine (SQLite + Oracle mTLS), portable JSON type, models, Alembic, Oracle bootstrap SQL, generated Oracle DDL, `db` CLI | Migrations green on SQLite; Oracle DDL generated and reviewed; maintainer applies bootstrap + migrations on ADB and `db check` passes |
-| **1b. Sync (current)** | `core`: Garmin access layer, normalization of the four data areas, `sync backfill --since`, incremental `sync run`, `sync status` | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
+| **1b. Sync (current)** | `core`: Garmin access layer, normalization of the four data areas, `sync backfill --since`, incremental `sync run`, `sync status`, `sync coverage` (follow-up) | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
 | 2. MCP over stdio | Read-only tools on the DB | Works with MCP Inspector and a desktop client |
 | 3. Streamable HTTP | Stateless 2026-07-28 transport + 2025 compatibility | Conformance tests pass |
 | 4. Agent | FastAPI `/chat` SSE, MCP client, OCI Responses tool loop | Answers questions on the four data areas citing dates and numbers |
@@ -159,7 +159,7 @@ Oracle) and `UTCDateTime`, models, Alembic migration `0001_ledger_store` with re
 the `db upgrade|sql|check` CLI with sanitized diagnostics. Verified by the maintainer on ADB.
 Do not change the schema without a new Alembic migration and a regenerated `schema.sql`.
 
-### Phase 1b tasks (current): sync
+### Phase 1b tasks (done): sync
 
 Branch `phase-1b-sync`. Scope is the `core` package only. Goal: an idempotent, resumable sync of
 the four MVP data areas from Garmin into the Phase 1a tables. Decisions already taken (do not
@@ -284,6 +284,44 @@ unless you stop and ask first.
 Acceptance: local checks pass; `sync backfill` and `sync run` work against the fake client on
 SQLite; the PR lists open questions and what the maintainer must verify with real data: a short
 backfill (e.g. 14 days) on ADB, a second `sync run` reporting zero updates, and `sync status`.
+
+### Phase 1b follow-up (current): sync coverage
+
+Branch `phase-1b-sync-coverage`. Scope is the `core` package only; no schema changes, no provider
+calls. Problem: `sync_state.last_synced_date` is only a high-water mark, so a gap between two
+backfilled ranges (e.g. a recent sync followed by an older, non-adjacent backfill) is invisible.
+Coverage can be derived from existing data: every committed chunk leaves at least one
+`raw_response` row with its `range_start`/`range_end` (unchanged responses are skipped only when
+an identical row for the same range already exists; failed chunks are rolled back). Normalized
+tables are **not** a coverage source: a day without records is normal.
+
+1. **Pure interval logic** (e.g. `athlete_ledger/coverage.py`): merge inclusive date ranges into
+   sorted, non-overlapping intervals; two ranges are contiguous when the next start is at most the
+   previous end plus one day. Return covered intervals and the gaps between them (inclusive
+   dates). Input order and duplicates must not matter.
+2. **Query**: per dataset, select only `DISTINCT range_start, range_end` from `raw_response` for
+   `provider = garmin_connect` and the dataset's endpoint (`ENDPOINTS`), ignoring rows with a null
+   range. Never load `payload` or `params` (CLOBs on Oracle). Portable SQLAlchemy, no
+   dialect-specific SQL; works with the read-only user given qualified table access later.
+3. **CLI**: `athlete-ledger sync coverage [--dataset NAME ...]` (default: all four datasets).
+   Like `sync status`, it reads only the database: no provider, no API key discovery, no network.
+   Per dataset print, dates and day counts only: each covered interval (`from`, `to`, days), each
+   gap between intervals, and, if the last covered day is before today (machine local date), the
+   not-yet-synced tail as a separate line. A dataset with no rows prints that nothing has been
+   downloaded. Use the `console` helpers (`[OK]` for a dataset with one interval and no gaps,
+   `[INFO]` otherwise). Exit code 0 unless the database operation fails (reuse the sanitized
+   Phase 1a diagnostics). After the gaps, print the exact `sync backfill --since ... --until ...`
+   command that would fill each gap.
+4. **Tests** (SQLite, synthetic rows only): interval merging (overlap, adjacency, one-day ranges,
+   duplicates, unsorted input, a real gap); the query ignores other providers/endpoints and null
+   ranges and does not select payload columns; CLI output for a dataset with a gap, a fully covered
+   dataset, an empty dataset, the tail line, and the `--dataset` filter; the command works with no
+   API key configured and never constructs a provider.
+5. **Docs**: README "Sync" section: what `sync coverage` shows, why it is derived from raw
+   responses, and how to close a gap with `sync backfill`.
+
+Acceptance: local checks pass; the maintainer runs `sync coverage` on ADB after the Phase 1b
+real-data check.
 
 ## Coding conventions
 
