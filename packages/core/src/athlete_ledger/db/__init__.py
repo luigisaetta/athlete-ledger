@@ -14,7 +14,7 @@ from sqlalchemy.engine import URL, make_url
 from sqlalchemy.pool import ConnectionPoolEntry
 
 from athlete_ledger.errors import ConfigurationError
-from athlete_ledger.settings import Settings
+from athlete_ledger.settings import DatabaseSettings
 
 
 def _enable_foreign_keys(connection: sqlite3.Connection, record: ConnectionPoolEntry) -> None:
@@ -32,7 +32,7 @@ def _enable_foreign_keys(connection: sqlite3.Connection, record: ConnectionPoolE
         cursor.close()
 
 
-def create_db_engine(settings: Settings) -> Engine:
+def create_db_engine(settings: DatabaseSettings) -> Engine:
     """Construct a lazy SQLite or Oracle thin-mode mTLS engine.
 
     Args:

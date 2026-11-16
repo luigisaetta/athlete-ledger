@@ -18,8 +18,8 @@ from athlete_ledger.errors import SettingsIssue
 DEFAULT_DB_URL = "sqlite:///./data/athlete_ledger.db"
 
 
-class Settings(BaseSettings):
-    """Select SQLite by default, or Oracle mTLS through an explicit DSN."""
+class DatabaseSettings(BaseSettings):
+    """Load database configuration without a provider API-key field or discovery."""
 
     model_config = SettingsConfigDict(
         env_prefix="ATHLETE_LEDGER_",
@@ -27,10 +27,6 @@ class Settings(BaseSettings):
         env_ignore_empty=True,
         extra="ignore",
         hide_input_in_errors=True,
-    )
-
-    personal_api_key: SecretStr | None = Field(
-        default=None, validation_alias="GARMIN_PERSONAL_API_KEY", repr=False
     )
 
     db_url: str | None = Field(default=None, repr=False)
@@ -66,7 +62,7 @@ class Settings(BaseSettings):
         """Reject conflicting selectors and incomplete or unsupported connection settings.
 
         Returns:
-            This Settings instance after cross-field validation succeeds.
+            This database configuration after cross-field validation succeeds.
 
         Raises:
             SettingsIssue: If URL and DSN are both set, Oracle mTLS fields are missing, or
@@ -106,6 +102,14 @@ class Settings(BaseSettings):
                     "DB_URL must be a SQLite URL; configure Oracle with DB_DSN.", ("db_url",)
                 )
         return self
+
+
+class Settings(DatabaseSettings):
+    """Extend owner database settings with the optional key used only by provider sync."""
+
+    personal_api_key: SecretStr | None = Field(
+        default=None, validation_alias="GARMIN_PERSONAL_API_KEY", repr=False
+    )
 
 
 def validation_environment_names(error: ValidationError) -> list[str]:
