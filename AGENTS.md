@@ -96,7 +96,8 @@ shadow the MCP SDK package on import.
 Settings are loaded with `pydantic-settings` from the environment and an optional `.env` file.
 Keep `.env.example` in sync with the variables actually used. Planned names:
 
-- `GARMIN_PERSONAL_API_KEY`: the SDK's standard variable (alternatively the SDK default key file).
+- `GARMIN_PERSONAL_API_KEY`: the SDK's standard variable, also read from `.env` by the settings
+  (alternatively the SDK default key file `~/.config/garmin/connect-personal-api-key`).
 - `ATHLETE_LEDGER_DB_URL`: SQLAlchemy URL for SQLite; default `sqlite:///./data/athlete_ledger.db`.
 - Oracle ADB (selected when `ATHLETE_LEDGER_DB_DSN` is set; setting both `ATHLETE_LEDGER_DB_URL`
   and `ATHLETE_LEDGER_DB_DSN` is a configuration error). Connection is **mTLS with a wallet**:
@@ -121,8 +122,8 @@ and any open questions.
 | Phase | Scope | Done when |
 |---|---|---|
 | 0. Foundation (done) | Workspace, tooling, local checks, `docs/reference/`, `.env.example` | All acceptance checks pass locally on an empty skeleton |
-| **1a. Ledger store (current)** | `core`: settings, SQLAlchemy engine (SQLite + Oracle mTLS), portable JSON type, models, Alembic, Oracle bootstrap SQL, generated Oracle DDL, `db` CLI | Migrations green on SQLite; Oracle DDL generated and reviewed; maintainer applies bootstrap + migrations on ADB and `db check` passes |
-| 1b. Sync | `core`: Garmin access layer, normalization of the four data areas, `sync backfill --since` and incremental `sync` | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
+| 1a. Ledger store (done) | `core`: settings, SQLAlchemy engine (SQLite + Oracle mTLS), portable JSON type, models, Alembic, Oracle bootstrap SQL, generated Oracle DDL, `db` CLI | Migrations green on SQLite; Oracle DDL generated and reviewed; maintainer applies bootstrap + migrations on ADB and `db check` passes |
+| **1b. Sync (current)** | `core`: Garmin access layer, normalization of the four data areas, `sync backfill --since`, incremental `sync run`, `sync status` | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
 | 2. MCP over stdio | Read-only tools on the DB | Works with MCP Inspector and a desktop client |
 | 3. Streamable HTTP | Stateless 2026-07-28 transport + 2025 compatibility | Conformance tests pass |
 | 4. Agent | FastAPI `/chat` SSE, MCP client, OCI Responses tool loop | Answers questions on the four data areas citing dates and numbers |
@@ -150,115 +151,161 @@ uv run --all-packages --no-sync mypy
 uv run --all-packages --no-sync pytest
 ```
 
-### Phase 1a tasks (current): ledger store
+### Phase 1a (done): ledger store
 
-Branch `phase-1a-ledger-store`. Scope is the `core` package only; no Garmin calls, no sync logic.
-Decisions already taken (do not revisit): the schema is defined **once** in SQLAlchemy models and
-evolved with Alembic, for portability; Oracle DDL is **generated**, never hand-written, except the
-one-off bootstrap script; ADB connection is mTLS with a wallet.
+Settings, SQLAlchemy engine (SQLite + Oracle thin-mode mTLS), `JSONDocument` (CLOB + `IS JSON` on
+Oracle) and `UTCDateTime`, models, Alembic migration `0001_ledger_store` with reader grants,
+`sql/oracle/00_bootstrap.sql`, generated `sql/oracle/schema.sql`, `scripts/create_tables.py`, and
+the `db upgrade|sql|check` CLI with sanitized diagnostics. Verified by the maintainer on ADB.
+Do not change the schema without a new Alembic migration and a regenerated `schema.sql`.
 
-1. **Dependencies** (`packages/core`): SQLAlchemy 2.0, Alembic, `python-oracledb`, Pydantic v2,
-   `pydantic-settings`. Compatible ranges, lock in `uv.lock`. Do not add the Garmin SDK yet (1b).
-2. **Settings** (`athlete_ledger.settings`): `pydantic-settings` model for the DB variables in
-   *Configuration*; SQLite by default; Oracle when `ATHLETE_LEDGER_DB_DSN` is set; error if both
-   URL and DSN are set, or if Oracle is selected without user, password, wallet dir, or wallet
-   password. Secrets as `SecretStr`.
-3. **Engine factory** (`athlete_ledger.db`): `create_engine` for SQLite (create the parent directory
-   of the file if missing) and for `oracle+oracledb` in **thin mode**, passing `dsn`, `config_dir`,
-   `wallet_location` (both the wallet dir), and `wallet_password` via `connect_args`. Do not call
-   `oracledb.init_oracle_client()` (that is thick mode). No connection is opened at import time.
-4. **Portable types** (`athlete_ledger.db.types`):
-   - `JSONDocument`: round-trips `dict`/`list` on SQLite and Oracle. **First task of the phase:**
-     check whether the locked SQLAlchemy version supports Oracle's native `JSON` type (ADB
-     23ai/26ai). Use it if supported; otherwise fall back to a `TypeDecorator` over CLOB (or BLOB)
-     with an `IS JSON` check constraint. Record the choice and the evidence in
-     `docs/reference/README.md` and in the PR description.
-   - `UTCDateTime`: timezone-aware in Python, stored as UTC on every backend (SQLite has no time
-     zones); reject naive datetimes on write.
-5. **Models** (`athlete_ledger.db.models`, typed `Mapped[...]`). Every table has a `provider`
-   column (string, e.g. `garmin_connect`). Units are part of column names. Avoid Oracle reserved
-   words as identifiers; unquoted lower-case names only.
-   - `raw_response`: surrogate identity PK; `provider`, `endpoint`, `params` (JSON), `range_start`
-     and `range_end` (dates, nullable), `fetched_at` (UTC), `content_sha256` (64 chars),
-     `sdk_version`, `is_empty` (bool), `payload` (JSON, nullable). Append-only: no unique
-     constraint on content; index on `(provider, endpoint, range_start)`.
-   - `activity`: PK `(provider, activity_id)` (big integer); `start_time_local` (naive local time
-     as returned by the provider, documented as such), `activity_name`, `activity_type`,
-     `distance_m`, `duration_s`, `avg_hr_bpm`, `calories_kcal`, `file_status` (default
-     `not_downloaded`), `source_response_id` (FK to `raw_response`), `updated_at` (UTC).
-   - `daily_sleep`: PK `(provider, calendar_date)`; `sleep_time_s`, `deep_sleep_s`,
-     `light_sleep_s`, `rem_sleep_s`, `awake_s`, `nap_time_s`, `sleep_score`, `avg_hr_bpm`,
-     `avg_respiration_brpm`, `source_response_id`, `updated_at`.
-   - `daily_hrv`: PK `(provider, calendar_date)`; `last_night_avg_ms`, `weekly_avg_ms`,
-     `last_night_5min_high_ms`, `baseline_balanced_low_ms`, `baseline_balanced_upper_ms`,
-     `hrv_status`, `source_response_id`, `updated_at`.
-   - `daily_stress`: PK `(provider, calendar_date)`; `overall_stress_level` (0–100), `rest_s`,
-     `low_stress_s`, `medium_stress_s`, `high_stress_s`, `source_response_id`, `updated_at`.
-   - `sync_state`: PK `(provider, dataset)`; `last_synced_date`, `last_run_at` (UTC),
-     `last_status`.
-   All metric columns are nullable (missing data is normal). For reference, the demo scripts read
-   these provider fields: activities `activityId`, `startTimeLocal`, `activityName`,
-   `activityType.typeKey`, `distance`, `duration`, `averageHR`, `calories`; sleep `calendarDate`,
-   `sleepTimeSeconds`, `deepSleepSeconds`, `lightSleepSeconds`, `remSleepSeconds`,
-   `awakeSleepSeconds`, `napTimeSeconds`, `sleepScores.overall.value`, `avgHeartRate`,
-   `averageRespirationValue`; HRV (`hrvSummaries[]`) `lastNightAvg`, `weeklyAvg`,
-   `lastNight5MinHigh`, `baseline.balancedLow`, `baseline.balancedUpper`, `status`; stress
-   `values.overallStressLevel`, `restStressDuration`, `lowStressDuration`,
-   `mediumStressDuration`, `highStressDuration`. The mapping itself is Phase 1b.
-6. **Alembic** inside the `core` package (migrations shipped with the package, configured
-   programmatically from settings, not from a hand-edited `alembic.ini` URL). One initial
-   migration creating all tables. When the dialect is Oracle, the migration also grants
-   `SELECT` on every table to the role `ATHLETE_LEDGER_READER` (and revokes on downgrade).
-7. **Oracle bootstrap** `sql/oracle/00_bootstrap.sql`, run once by the maintainer as `ADMIN` with
-   SQLcl. Passwords come from substitution variables (prompted), never literals. It creates the
-   owner `ATHLETE_LEDGER` (quota on `DATA`; `CREATE SESSION`, `CREATE TABLE`, `CREATE SEQUENCE`,
-   `CREATE VIEW` only), the role `ATHLETE_LEDGER_READER`, and the user `ATHLETE_LEDGER_RO`
-   (`CREATE SESSION` plus the role, nothing else). Idempotent where practical; header comment
-   explains how to run it.
-8. **Generated Oracle DDL** `sql/oracle/schema.sql`: produced by Alembic offline mode for the
-   Oracle dialect (no connection). Add a CLI command to regenerate it and a test that fails if the
-   committed file is out of date.
-9. **CLI** (extend the `athlete-ledger` entry point, `argparse`, no extra framework):
-   - `athlete-ledger db upgrade` — apply migrations to the configured database.
-   - `athlete-ledger db sql [--dialect oracle|sqlite]` — print offline DDL to stdout.
-   - `athlete-ledger db check` — connect, print backend, server version, and current Alembic
-     revision; never print credentials or row contents. Non-zero exit on failure.
-   Keep `athlete-ledger --version`.
-10. **Tests** (SQLite only; no Oracle in tests): settings validation (defaults, Oracle selection,
-    conflicting/missing values, secrets absent from `repr`), Oracle engine factory builds the right
-    `connect_args` without connecting, migration upgrade/downgrade on a temporary SQLite file,
-    model round-trip including `JSONDocument` and `UTCDateTime`, composite keys rejecting
-    duplicates, offline Oracle DDL contains the tables and the reader grants, `schema.sql` up to date.
-11. **Docs**: README section "Database" (SQLite quick start; ADB with wallet: bootstrap, env vars,
-    `db upgrade`, `db check`); `.env.example` updated with the new variable names (empty values).
+### Phase 1b tasks (current): sync
 
-Acceptance: local checks pass; `athlete-ledger db upgrade` and `db check` work on SQLite; the PR
-lists the JSON type decision and anything the maintainer must verify on ADB. The maintainer then
-runs the bootstrap, `db upgrade`, and `db check` against ADB before Phase 1b starts.
+Branch `phase-1b-sync`. Scope is the `core` package only. Goal: an idempotent, resumable sync of
+the four MVP data areas from Garmin into the Phase 1a tables. Decisions already taken (do not
+revisit): raw responses are stored first and normalized tables are derived from them; one
+provider (`garmin_connect`) but provider-specific code stays in its own modules; upserts are
+portable ORM code (no dialect-specific `INSERT ... ON CONFLICT` / `MERGE`); no schema changes
+unless you stop and ask first.
 
-## Domain notes for Phase 1b (read before starting it)
+0. **Conventions first** (separate commit `docs: add file headers and docstrings`, no behaviour
+   change): add the header from *Coding conventions* to every existing Python file, turning the
+   current module docstring into the `Description`, and bring every existing function, method,
+   and class docstring to Google style. Enable ruff `D` rules with
+   `[tool.ruff.lint.pydocstyle] convention = "google"` (add `"D"` to `select`). Add a test that
+   fails if a tracked `.py` file lacks the header (shebang allowed before it; check the four keys,
+   `License: MIT`, and a valid ISO date). New code in this phase follows both rules from the
+   start.
 
-Garmin's SDK is a thin `requests` wrapper returning raw JSON. The `core` access layer must add:
+1. **Dependency**: add `garmin-connect-personal-api-python>=1.0,<2` (published on PyPI; import
+   `garmin_personal_api`) to `packages/core` and update `uv.lock`. Read its source in the installed
+   package before coding; do not rely on memory. Relevant public API: `resolve_api_key`,
+   `PersonalApiAuthenticator(...).obtain_token(key, force_refresh=...)` returning `BearerToken`,
+   `GarminPersonalApiClient(token, timeout=...)` with `update_bearer_token`, `search_activities`,
+   `get_daily_sleep_summaries`, `get_daily_hrv_summaries`, `get_daily_stress`, and the errors
+   `GarminPersonalApiError` / `HttpError(status_code, method, url, response_text)`.
 
-- Bearer-token handling: tokens last 24 h, no refresh token; the client does **not** refresh on 401.
-  Use `PersonalApiAuthenticator.obtain_token()` and `client.update_bearer_token()`; retry once on 401.
-- Retry with backoff on 429 and 5xx (the SDK raises a single `HttpError` with `status_code`).
-- Activity pagination with `start`/`limit` until an empty page; de-duplicate by `activityId`;
-  fail if a page makes no progress.
-- Date ranges split into inclusive 7-day chunks (stress allows at most 28 days).
-- Response shapes differ: some endpoints return a list, others an object wrapping a list
-  (e.g. `hrvSummaries`). Assign records by their `calendarDate`, never by position.
-- Skip placeholder records with null `calendarDate`; treat negative sentinel values as missing;
-  keep zeros as valid values.
-- Store every response in `raw_response` (endpoint, params, fetched_at, content hash, SDK version,
-  JSON) and derive normalized tables from it. Re-fetch the last 3 days on each sync; update rows
-  only when the hash changes.
+2. **Credentials** (`athlete_ledger.settings`): add an optional `SecretStr` field read from
+   `GARMIN_PERSONAL_API_KEY` (no `ATHLETE_LEDGER_` prefix: it is the SDK's standard name; use a
+   validation alias) so a value in `.env` works, since `pydantic-settings` does not export `.env`
+   entries to `os.environ`. Pass it explicitly to `resolve_api_key(key=...)`; when unset, let
+   `resolve_api_key` fall back to its environment variable and default key file
+   (`~/.config/garmin/connect-personal-api-key`). Keep the SDK's default bearer-token cache file
+   (outside the repository, mode 0600). Never print, log, or put the key or token in exceptions.
 
-MVP data areas (summaries only): activities (`search_activities`), sleep
-(`get_daily_sleep_summaries`), HRV (`get_daily_hrv_summaries`), stress (`get_daily_stress`).
-Out of scope for the MVP: FIT files, intraday series, writing to Garmin, multiple users.
+3. **Garmin access layer** (`athlete_ledger/providers/garmin_connect.py`): a small class wrapping
+   the SDK client, constructed with injectable client/authenticator factories, a `sleep` function,
+   and a clock, so tests use fakes and never touch the network.
+   - **401**: once per request, call `obtain_token(key, force_refresh=True)`, then
+     `update_bearer_token`, then retry. A second 401 (or a 403) is fatal with a message about the
+     key's validity/expiry (keys expire after 30 days to 1 year).
+   - **429, 5xx, `requests.Timeout`, `requests.ConnectionError`**: retry with exponential backoff
+     (e.g. 2, 4, 8 s; at most 3 retries), then fail. Other 4xx: fail immediately.
+   - **Never render an `HttpError` with `str()`**: its message embeds the response body. Error
+     output uses only endpoint name, HTTP status, and method. Do not configure the SDK's logger
+     above `WARNING` in the CLI.
+   - **Date chunks**: inclusive 7-day windows (stress allows at most 28 days).
+   - **Activities**: `search_activities(start=..., limit=100, start_date=..., end_date=...)` per
+     chunk, paging until an empty page; de-duplicate by `activityId`; fail if a page adds nothing
+     new (no progress). Each page is one stored raw response.
+   - **Response shapes**: sleep and stress return a JSON list; HRV returns an object with
+     `hrvSummaries` (list). `None` (empty body) means no records. Any other shape is an
+     unexpected-response error naming the endpoint.
+
+4. **Raw storage**: for every response, compute `content_sha256` over canonical JSON
+   (`sort_keys=True`, compact separators, UTF-8; empty body hashes the literal `null`). Look up the
+   latest `raw_response` for the same provider, endpoint, `range_start`, `range_end` and equal
+   `params` (compare params in Python; CLOB cannot be compared in SQL on Oracle). If its hash is
+   identical, store nothing and skip normalization for that response (count it as unchanged).
+   Otherwise insert a new row (`is_empty`, `sdk_version` from `garmin_personal_api.__version__`,
+   `fetched_at` aware UTC) and normalize it. `raw_response` stays append-only.
+
+5. **Normalization** (`athlete_ledger/normalize/garmin_connect.py`): pure functions from one raw
+   payload to row dictionaries, no database or network access, so they can later rebuild the
+   normalized tables from `raw_response` alone. Field mapping:
+   - activity: `activityId` → `activity_id`; `startTimeLocal` (`YYYY-MM-DD HH:MM:SS`, provider
+     local wall time, keep naive) → `start_time_local`; `activityName`; `activityType.typeKey`;
+     `distance` (m); `duration` (s); `averageHR`; `calories`.
+   - sleep: `calendarDate`; `sleepTimeSeconds`, `deepSleepSeconds`, `lightSleepSeconds`,
+     `remSleepSeconds`, `awakeSleepSeconds`, `napTimeSeconds`; `sleepScores.overall.value`;
+     `avgHeartRate`; `averageRespirationValue`.
+   - HRV (each item of `hrvSummaries`): `calendarDate`; `lastNightAvg`; `weeklyAvg`;
+     `lastNight5MinHigh`; `baseline.balancedLow`; `baseline.balancedUpper`; `status`.
+   - stress: `calendarDate`; `values.overallStressLevel`; `values.restStressDuration`,
+     `lowStressDuration`, `mediumStressDuration`, `highStressDuration` (seconds).
+   Value rules: missing keys or nested objects → NULL; booleans, non-finite and non-numeric values
+   → NULL; **negative numbers are sentinels → NULL**; zero is a valid value; integer columns accept
+   integral floats and round other floats; `overall_stress_level` outside 0–100 → NULL. Records
+   with a null `calendarDate` are placeholders: skip and count them. A daily record dated outside
+   its requested chunk, or two records with the same date in one response, is an
+   unexpected-response error. Activities without `activityId` are an error.
+
+6. **Upsert**: load by primary key; insert if absent; otherwise assign only changed columns, so
+   `updated_at` and `source_response_id` change only when values change. Use the raw row that
+   produced the change as `source_response_id`. Records missing from a later response are not
+   deleted (provider-side deletions are out of scope for the MVP; document it).
+
+7. **Sync engine and state** (`athlete_ledger/sync.py`): datasets `activities`, `sleep`, `hrv`,
+   `stress`. Process chunks in date order; **commit after each chunk** (raw rows, normalized rows,
+   and `sync_state` together) so an interrupted run keeps completed chunks and resumes cleanly.
+   `sync_state.last_synced_date` is the end of the last committed chunk; `last_run_at` is UTC;
+   `last_status` is `ok` or `failed` (on failure, roll back the current chunk, record `failed` in a
+   separate transaction, keep the previous `last_synced_date`). "Today" is the local date of the
+   machine running the sync.
+
+8. **CLI** (extend `athlete-ledger`, `argparse`):
+   - `athlete-ledger sync backfill --since YYYY-MM-DD [--until YYYY-MM-DD] [--dataset NAME ...]`:
+     `--until` defaults to today; reject future dates and `since > until`.
+   - `athlete-ledger sync run [--dataset NAME ...]`: incremental, from `last_synced_date - 2 days`
+     (re-fetches the last 3 days) to today. A dataset with no state is an error that tells the user
+     to run `sync backfill` first.
+   - `athlete-ledger sync status`: per dataset, `last_synced_date`, `last_run_at`, `last_status`
+     only.
+   Default: all four datasets. Output per dataset: chunks, requests, raw stored/unchanged, rows
+   inserted/updated/unchanged, placeholders skipped, using the `console` helpers. **Never print
+   metric values, activity names, or payloads.** Exit code non-zero if any dataset fails; other
+   datasets still run. Reuse the sanitized database/settings diagnostics from Phase 1a.
+
+9. **Tests** (SQLite, synthetic fixtures only, fake client; no network, no real data):
+   chunking (1, 7, 8, 29 days); activity paging incl. duplicates and the no-progress error; 401 →
+   refresh → success, and 401 twice → fatal; 429/5xx/timeout backoff with a fake `sleep`;
+   non-retryable 4xx; `HttpError` text never appears in output (use a response body containing a
+   marker string); each response shape and invalid shapes; normalization rules (negative, zero,
+   missing, nested null, bool, float→int, stress > 100, placeholder, out-of-range date, duplicate
+   date); idempotence (two identical runs → no new raw rows, zero updates); a changed payload
+   updates only the affected rows; resume after a failure in a middle chunk; `sync run` window and
+   the missing-state error; CLI output contains no fixture metric values or names.
+
+10. **Docs**: README "Sync" section (key setup via Personal API key, token cache location,
+    backfill then incremental run, what is printed, re-fetch window, no deletions, one sync at a
+    time); `.env.example` unchanged unless a new variable is added; `docs/reference/README.md`
+    notes the SDK version and any behaviour verified while reading its source.
+
+Acceptance: local checks pass; `sync backfill` and `sync run` work against the fake client on
+SQLite; the PR lists open questions and what the maintainer must verify with real data: a short
+backfill (e.g. 14 days) on ADB, a second `sync run` reporting zero updates, and `sync status`.
 
 ## Coding conventions
+
+- **File header.** Every Python file (source, tests, scripts, Alembic migrations) starts with this
+  module docstring, using the date of the file's last real modification (update it whenever you
+  change the file). Only a shebang line may precede it. Indent continuation lines of the
+  description by four spaces:
+
+  ```python
+  """
+  Author: L. Saetta
+  Date Last Modified: YYYY-MM-DD
+  License: MIT
+  Description: Brief description of this file's responsibilities.
+  """
+  ```
+
+  The header is authorship metadata, not attribution: never name an AI tool in it (hard rule 0).
+- **Google-style docstrings.** Every function, method, and class has a Google-style docstring,
+  with `Args`, `Returns`, `Yields`, and `Raises` sections where they apply. This includes private
+  helpers and test functions (a one-line docstring is enough for a test). Enforced by ruff's
+  pydocstyle rules (`D`) with `convention = "google"`.
 
 - Small, typed, documented functions; no network calls in unit tests (mock the SDK client).
 - Timezone-aware datetimes for fetch timestamps; calendar dates as `datetime.date`.
