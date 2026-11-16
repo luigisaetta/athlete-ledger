@@ -80,8 +80,12 @@ def run(argv: Sequence[str] | None = None) -> int:
         logger = logging.getLogger(namespace)
         logger.handlers = [logging.NullHandler()]
         logger.propagate = False
-    trace.set_tracer_provider(trace.NoOpTracerProvider())
     try:
+        provider = trace.get_tracer_provider()
+        if isinstance(provider, trace.ProxyTracerProvider):
+            trace.set_tracer_provider(trace.NoOpTracerProvider())
+        elif not isinstance(provider, trace.NoOpTracerProvider):
+            raise ConfigurationError("Telemetry must be disabled for the MCP server.")
         settings_options: dict[str, Any] = {"_env_file": args.env_file}
         settings = MCPSettings(**settings_options)
         engine = create_reader_engine(settings)

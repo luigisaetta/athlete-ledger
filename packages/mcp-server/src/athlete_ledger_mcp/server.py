@@ -9,13 +9,14 @@ import logging
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import oracledb
 from athlete_ledger.errors import database_error_code
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
+from pydantic import Field
 from sqlalchemy import Engine
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -83,7 +84,10 @@ def create_server(
 
     @server.tool(title="Activity summaries", annotations=annotations, structured_output=True)
     def list_activities(
-        start: str, end: str, sport: str | None = None, limit: int = 50
+        start: str,
+        end: str,
+        sport: str | None = None,
+        limit: Annotated[int, Field(strict=True, ge=1, le=200)] = 50,
     ) -> ActivityList:
         """List activities in inclusive YYYY-MM-DD local dates, ordered by start then ID.
 
