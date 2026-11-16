@@ -127,7 +127,7 @@ and any open questions.
 | 0. Foundation (done) | Workspace, tooling, local checks, `docs/reference/`, `.env.example` | All acceptance checks pass locally on an empty skeleton |
 | 1a. Ledger store (done) | `core`: settings, SQLAlchemy engine (SQLite + Oracle mTLS), portable JSON type, models, Alembic, Oracle bootstrap SQL, generated Oracle DDL, `db` CLI | Migrations green on SQLite; Oracle DDL generated and reviewed; maintainer applies bootstrap + migrations on ADB and `db check` passes |
 | 1b. Sync (done) | `core`: Garmin access layer, normalization of the four data areas, `sync backfill --since`, incremental `sync run`, `sync status`, `sync coverage` (follow-up) | Re-running sync creates no duplicates; tests green on SQLite (ADB tested by the maintainer) |
-| **2. MCP over stdio (current)** | Four read-only data tools on the DB (`ledger_status`, `list_activities`, `activity_totals`, `daily_wellness`) | Works with MCP Inspector and a desktop client |
+| 2. MCP over stdio (done) | Four read-only data tools on the DB (`ledger_status`, `list_activities`, `activity_totals`, `daily_wellness`) | Works with MCP Inspector and a desktop client |
 | 3. Streamable HTTP | Stateless 2026-07-28 transport + 2025 compatibility | Conformance tests pass |
 | 4. Agent | FastAPI `/chat` SSE, MCP client, OCI Responses tool loop | Answers questions on the four data areas citing dates and numbers |
 | 5. UI | Next.js chat with tool-call cards | End-to-end demo works |
@@ -326,7 +326,7 @@ tables are **not** a coverage source: a day without records is normal.
 Acceptance: local checks pass; the maintainer runs `sync coverage` on ADB after the Phase 1b
 real-data check.
 
-### Phase 2 tasks (current): MCP over stdio
+### Phase 2 tasks (done): MCP over stdio
 
 Branch `phase-2-mcp-stdio`. Scope: the `mcp-server` package, plus small read-only helpers in
 `core` only if they are reused by both. No schema changes, no provider calls, no HTTP transport
@@ -417,6 +417,75 @@ job and may be added later); it reads the database only, as the read-only user o
 
 Acceptance: local checks pass; the maintainer connects the MCP Inspector and a desktop client,
 on SQLite and on ADB as `ATHLETE_LEDGER_RO`, and asks questions on real data.
+
+### Activity training metrics, part 1 (current): schema migration
+
+Branch `activity-metrics-schema`. Scope: the `core` database layer only. This patch adds columns
+to `activity`; it does **not** change normalization, sync, or the MCP server. The new columns stay
+NULL until part 2 (normalization mapping plus a `sync rebuild` command that re-derives the
+normalized tables from `raw_response`, with no new downloads) and part 3 (MCP exposure). Decisions
+already taken (do not revisit): one new Alembic revision, models and migration kept identical,
+generated Oracle DDL regenerated, no hand-written DDL.
+
+**New nullable columns on `activity`** (names carry units; source field in the provider's
+`search_activities` record, for reference only; the mapping itself is part 2):
+
+| Column | Type | Provider field |
+|---|---|---|
+| `aerobic_training_effect` | float | `aerobicTrainingEffect` (0.0–5.0) |
+| `anaerobic_training_effect` | float | `anaerobicTrainingEffect` (0.0–5.0) |
+| `training_effect_label` | string(64) | `trainingEffectLabel` |
+| `training_load` | float | `activityTrainingLoad` |
+| `training_stress_score` | float | `trainingStressScore` |
+| `intensity_factor` | float | `intensityFactor` |
+| `normalized_power_w` | float | `normPower` |
+| `elevation_gain_m` | float | `elevationGain` |
+| `elevation_loss_m` | float | `elevationLoss` |
+| `max_hr_bpm` | float | `maxHR` |
+| `avg_speed_mps` | float | `averageSpeed` (metres per second) |
+| `moving_duration_s` | float | `movingDuration` |
+| `moderate_intensity_min` | integer | `moderateIntensityMinutes` |
+| `vigorous_intensity_min` | integer | `vigorousIntensityMinutes` |
+| `hr_zone_1_s` … `hr_zone_5_s` | float (5 columns) | `hrTimeInZone_1` … `hrTimeInZone_5` |
+
+Use the same SQLAlchemy type style as the existing metric columns (`Mapped[float | None]` /
+`Mapped[int | None]`, `String(64)` for the label). No check constraints, no defaults, no indexes.
+
+**Never add columns for** GPS coordinates (`startLatitude`, `startLongitude`, `endLatitude`,
+`endLongitude`), `locationName`, owner identity (`ownerId`, `ownerFullName`,
+`ownerDisplayName`, `ownerProfileImageUrl*`), or device identifiers. They stay only in
+`raw_response`.
+
+1. **Models** (`athlete_ledger.db.models.Activity`): add the 19 columns above.
+2. **Migration** `0002_activity_training_metrics` (`down_revision = "0001_ledger_store"`):
+   add the columns with `op.batch_alter_table("activity")` so the downgrade also works on SQLite;
+   downgrade drops exactly these columns. No data changes, no grant changes: the existing
+   table-level `SELECT` grant to `ATHLETE_LEDGER_READER` already covers new columns (state this
+   in the migration's docstring). Like `0001`, the migration must not import the live models.
+3. **First installation**: a new database gets everything by applying migrations to head, so
+   `athlete-ledger db upgrade` and `scripts/create_tables.py` need no special path; verify that
+   both reach `0002_activity_training_metrics` on an empty database. `sql/oracle/00_bootstrap.sql`
+   is unchanged.
+4. **Generated DDL**: regenerate `sql/oracle/schema.sql`; it must contain both revisions.
+5. **Tests** (SQLite):
+   - empty database → head: all 19 columns exist and are nullable;
+   - upgrade from `0001` with synthetic `raw_response` and `activity` rows: rows and existing
+     values preserved, new columns NULL;
+   - downgrade to `0001`: the 19 columns are gone, existing data preserved; upgrade again works;
+   - **model/migration parity**: Alembic `compare_metadata` between an upgraded database and
+     `Base.metadata` reports no differences;
+   - offline Oracle DDL contains the new `ALTER TABLE activity ADD` statements, and
+     `schema.sql` is up to date;
+   - no `activity` column name contains `lat`, `lon`, `location`, `owner`, or `device`;
+   - `db check` reports `0002_activity_training_metrics`;
+   - existing sync and MCP tests still pass unchanged.
+6. **Docs**: update the revision named in README ("Database") and `docs/oracle-adb-setup.md`
+   (`0001_ledger_store` → current head) and add a short "Upgrading an existing database" note:
+   run `athlete-ledger db upgrade` (or `scripts/create_tables.py`) as the schema owner; the new
+   columns stay empty until the next patch.
+
+Acceptance: local checks pass; the maintainer upgrades ADB as the owner, `db check` shows
+`0002_activity_training_metrics`, and `sync run` and the MCP server keep working.
 
 ## Coding conventions
 
