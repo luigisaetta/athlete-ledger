@@ -115,6 +115,53 @@ def _text(value: Any) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _training_metrics(record: dict[str, Any]) -> dict[str, Any]:
+    """Read only the allowlisted activity training fields using existing numeric rules.
+
+    Args:
+        record: One raw activity summary; location, owner and device keys are never read.
+
+    Returns:
+        All nineteen training columns, with invalid/missing metrics mapped to None.
+        Training effects are bounded to 0–5; labels must be nonempty strings of
+        at most 64 characters, and intensity minutes use integer rounding.
+    """
+    result = {
+        dest: _metric(record.get(src), integer=dest.endswith("_min"))
+        for dest, src in {
+            "training_load": "activityTrainingLoad",
+            "training_stress_score": "trainingStressScore",
+            "intensity_factor": "intensityFactor",
+            "normalized_power_w": "normPower",
+            "elevation_gain_m": "elevationGain",
+            "elevation_loss_m": "elevationLoss",
+            "max_hr_bpm": "maxHR",
+            "avg_speed_mps": "averageSpeed",
+            "moving_duration_s": "movingDuration",
+            "moderate_intensity_min": "moderateIntensityMinutes",
+            "vigorous_intensity_min": "vigorousIntensityMinutes",
+            "hr_zone_1_s": "hrTimeInZone_1",
+            "hr_zone_2_s": "hrTimeInZone_2",
+            "hr_zone_3_s": "hrTimeInZone_3",
+            "hr_zone_4_s": "hrTimeInZone_4",
+            "hr_zone_5_s": "hrTimeInZone_5",
+        }.items()
+    }
+    for dest, src in {
+        "aerobic_training_effect": "aerobicTrainingEffect",
+        "anaerobic_training_effect": "anaerobicTrainingEffect",
+    }.items():
+        value = _metric(record.get(src))
+        result[dest] = value if value is not None and value <= 5 else None
+    label = record.get("trainingEffectLabel")
+    return {
+        **result,
+        "training_effect_label": label
+        if isinstance(label, str) and 1 <= len(label) <= 64
+        else None,
+    }
+
+
 def normalize(dataset: str, payload: Any, start: date, end: date) -> NormalizedBatch:
     """Derive row dictionaries solely from one response and its date range.
 
@@ -165,6 +212,7 @@ def normalize(dataset: str, payload: Any, start: date, end: date) -> NormalizedB
                         "calories_kcal": "calories",
                     }.items()
                 },
+                **_training_metrics(record),
             }
         else:
             calendar = record.get("calendarDate")
