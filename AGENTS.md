@@ -524,9 +524,12 @@ a new download; the upsert logic is shared between sync and rebuild, not duplica
 3. **Rebuild** (e.g. `athlete_ledger/rebuild.py`): for each selected dataset, read its
    `raw_response` rows (`provider = garmin_connect`, the dataset's endpoint) in ascending `id`
    order, i.e. fetch order, and normalize each payload with its stored `range_start`/`range_end`.
-   Apply the rows through the shared upsert, so the most recently fetched raw response for a
-   record wins, exactly as during sync. Within one chunk (same endpoint and range), the first
-   occurrence of an activity ID wins, as during sync. Rules:
+   Apply every non-empty raw response through the shared upsert in ascending id order:
+   **last applied wins**. A record takes the values of the last raw response that contains it;
+   later occurrences within a response also win. Sync applies every stored page with the same
+   rule: no cross-page or within-chunk deduplication. Keep the provider's pagination no-progress
+   check unchanged. Never infer chunk or run boundaries from ranges, offsets or empty pages.
+   A second rebuild must report zero net inserts and updates. Rules:
    - read-only on `raw_response` and `sync_state`; never insert, update, or delete them;
    - never delete normalized rows (records absent from later raw responses stay, as in sync);
    - empty raw responses (`is_empty`) are skipped; a raw row with a null range, or a payload that
