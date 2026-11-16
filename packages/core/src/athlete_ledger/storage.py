@@ -21,6 +21,8 @@ from athlete_ledger.normalize.garmin_connect import normalize, records
 from athlete_ledger.sync_types import PROVIDER, ProviderError, Response
 
 NormalizedRecord = Activity | DailySleep | DailyHRV | DailyStress
+NormalizedKey = tuple[str, int | date]
+UpsertCache = dict[NormalizedKey, NormalizedRecord | None]
 MODELS: dict[str, type[NormalizedRecord]] = {
     "activities": Activity,
     "sleep": DailySleep,
@@ -139,6 +141,7 @@ def upsert_row(
     source_response_id: int,
     clock: Callable[[], datetime],
     counts: Counts,
+    cache: UpsertCache | None = None,
 ) -> None:
     """Insert a normalized row or assign only changed values without committing.
 
@@ -149,16 +152,22 @@ def upsert_row(
         source_response_id: Stored raw row that produced these values.
         clock: Aware timestamp source, called only for an inserted or changed row.
         counts: Caller-owned counters incremented for insertion, change or no change.
+        cache: Optional identity cache for deferred-flush replay, including pending
+            inserts; None preserves ordinary sync session lookups.
     """
     model = MODELS[dataset]
     identifier = row["activity_id"] if dataset == "activities" else row["calendar_date"]
-    existing = cast(NormalizedRecord | None, session.get(model, (PROVIDER, identifier)))
+    cache_key = (dataset, identifier)
+    existing = (
+        cache[cache_key]
+        if cache is not None and cache_key in cache
+        else cast(NormalizedRecord | None, session.get(model, (PROVIDER, identifier)))
+    )
     if existing is None:
-        session.add(
-            model(
-                **row, provider=PROVIDER, source_response_id=source_response_id, updated_at=clock()
-            )
+        existing = model(
+            **row, provider=PROVIDER, source_response_id=source_response_id, updated_at=clock()
         )
+        session.add(existing)
         counts.inserted += 1
     else:
         changed = {key: value for key, value in row.items() if getattr(existing, key) != value}
@@ -170,3 +179,5 @@ def upsert_row(
             counts.updated += 1
         else:
             counts.unchanged += 1
+    if cache is not None:
+        cache[cache_key] = existing
