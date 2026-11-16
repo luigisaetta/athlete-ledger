@@ -16,10 +16,11 @@ SYNTHETIC_WALLET_PASSWORD = "synthetic-wallet-secret"
 
 
 def oracle_options() -> dict[str, object]:
-    """Handle oracle options.
+    """Build a complete Oracle settings dictionary using synthetic credentials only.
 
     Returns:
-        The operation result.
+        Settings keyword arguments for a synthetic owner, DSN, wallet directory and both
+        secret passwords.
     """
     return {
         "db_user": "synthetic_owner",

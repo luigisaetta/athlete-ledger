@@ -29,28 +29,30 @@ class JSONDocument(TypeDecorator[JSONValue]):
     cache_ok = True
 
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[Any]:
-        """Handle load dialect impl.
+        """Choose Oracle CLOB or portable text storage for a JSON document.
 
         Args:
-            dialect: Dialect for this operation.
+            dialect: SQLAlchemy backend dialect requesting the storage implementation.
 
         Returns:
-            The operation result.
+            The dialect-adapted CLOB type for Oracle, or Text for other supported backends.
         """
         return dialect.type_descriptor(CLOB() if dialect.name == "oracle" else Text())
 
     def process_bind_param(self, value: JSONValue | None, dialect: Dialect) -> str | None:
-        """Handle process bind param.
+        """Serialize a dict/list document before binding it to a SQL parameter.
 
         Args:
-            value: Value for this operation.
-            dialect: Dialect for this operation.
+            value: Python dict/list document to encode, or None to store SQL NULL.
+            dialect: Active SQLAlchemy dialect; JSON encoding is identical across backends.
 
         Returns:
-            The operation result.
+            A Unicode JSON string with sorted object keys and finite numeric values, or None
+            for SQL NULL.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If value is neither a dict nor a list, or contains values that
+                cannot be serialized as finite JSON.
         """
         if value is None:
             return None
@@ -62,17 +64,20 @@ class JSONDocument(TypeDecorator[JSONValue]):
             raise ValueError("Invalid JSON document.") from None
 
     def process_result_value(self, value: Any, dialect: Dialect) -> JSONValue | None:
-        """Handle process result value.
+        """Decode database text or accept an already decoded JSON document.
 
         Args:
-            value: Value for this operation.
-            dialect: Dialect for this operation.
+            value: Returned text/bytes, a driver-decoded dict/list, or SQL NULL represented
+                by None.
+            dialect: Active SQLAlchemy dialect; decoding also accepts Oracle driver
+                conversion.
 
         Returns:
-            The operation result.
+            A Python dict/list document, or None for SQL NULL.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If stored text is not valid JSON or the decoded value is not a dict
+                or list.
         """
         if value is None:
             return None
@@ -90,30 +95,32 @@ class UTCDateTime(TypeDecorator[datetime]):
     cache_ok = True
 
     def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[Any]:
-        """Handle load dialect impl.
+        """Choose a timezone-free storage type that preserves timestamp precision.
 
         Args:
-            dialect: Dialect for this operation.
+            dialect: SQLAlchemy backend dialect requesting the timestamp implementation.
 
         Returns:
-            The operation result.
+            Oracle TIMESTAMP without timezone, or DateTime without timezone for other
+            supported backends.
         """
         if dialect.name == "oracle":
             return dialect.type_descriptor(TIMESTAMP(timezone=False))
         return dialect.type_descriptor(DateTime(timezone=False))
 
     def process_bind_param(self, value: datetime | None, dialect: Dialect) -> datetime | None:
-        """Handle process bind param.
+        """Convert an aware datetime to naive UTC for database storage.
 
         Args:
-            value: Value for this operation.
-            dialect: Dialect for this operation.
+            value: Timezone-aware datetime to normalize, or None for SQL NULL.
+            dialect: Active SQLAlchemy dialect; the UTC normalization is backend-
+                independent.
 
         Returns:
-            The operation result.
+            The same instant in UTC with tzinfo removed, or None for SQL NULL.
 
         Raises:
-            ValueError: If the operation cannot be completed.
+            ValueError: If value has no timezone or its timezone provides no UTC offset.
         """
         if value is None:
             return None
@@ -122,14 +129,16 @@ class UTCDateTime(TypeDecorator[datetime]):
         return value.astimezone(UTC).replace(tzinfo=None)
 
     def process_result_value(self, value: datetime | None, dialect: Dialect) -> datetime | None:
-        """Handle process result value.
+        """Restore UTC timezone awareness to a stored timestamp.
 
         Args:
-            value: Value for this operation.
-            dialect: Dialect for this operation.
+            value: Database datetime, interpreted as UTC when naive, or None for SQL NULL.
+            dialect: Active SQLAlchemy dialect; all supported backends return aware UTC to
+                Python.
 
         Returns:
-            The operation result.
+            A datetime with UTC tzinfo, converting any supplied offset to UTC, or None for
+            SQL NULL.
         """
         if value is None:
             return None

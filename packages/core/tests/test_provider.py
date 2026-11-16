@@ -21,21 +21,26 @@ MARKER = "SYNTHETIC-PRIVATE-RESPONSE-BODY"
 
 
 class UnsafeHttpError(HttpError):
-    """Simulate UnsafeHttpError."""
+    """Expose any accidental formatting of a body-bearing SDK error."""
 
     def __str__(self):
-        """Simulate str."""
+        """Reject string rendering of the deliberately unsafe SDK exception.
+
+        Raises:
+            AssertionError: Always, so tests fail if production code formats HttpError.
+        """
         raise AssertionError("HttpError must never be rendered")
 
 
 def http(status):
-    """Simulate http.
+    """Construct an HTTP failure with a synthetic response-body marker.
 
     Args:
-        status: Synthetic status input.
+        status: HTTP status code the fake SDK should report.
 
     Returns:
-        The synthetic operation result.
+        UnsafeHttpError for a fixed synthetic GET URL, carrying MARKER in its response
+        text.
     """
     return UnsafeHttpError(
         status_code=status,
@@ -46,13 +51,14 @@ def http(status):
 
 
 class FakeClient:
-    """Simulate FakeClient."""
+    """Record SDK-style calls and return or raise queued synthetic outcomes."""
 
     def __init__(self, outcomes):
-        """Simulate init.
+        """Initialize the response queue and client lifecycle records.
 
         Args:
-            outcomes: Synthetic outcomes input.
+            outcomes: Ordered JSON payloads or exception instances consumed by endpoint
+                calls.
         """
         self.outcomes = list(outcomes)
         self.calls = []
@@ -60,13 +66,19 @@ class FakeClient:
         self.closed = False
 
     def fetch(self, **params):
-        """Simulate fetch.
+        """Record one endpoint call and consume its next queued outcome.
 
         Args:
-            **params: Synthetic params input.
+            **params: SDK endpoint arguments, including inclusive dates and optional paging
+                offsets.
 
         Returns:
-            The synthetic operation result.
+            The next queued decoded response payload, including None for an empty body.
+
+        Raises:
+            BaseException: If the queued outcome is an exception instance.
+            IndexError: If the test makes more endpoint calls than the queued outcomes
+                allow.
         """
         self.calls.append(params)
         value = self.outcomes.pop(0)
@@ -80,40 +92,45 @@ class FakeClient:
     get_daily_stress = fetch
 
     def update_bearer_token(self, token):
-        """Simulate update bearer token.
+        """Record the replacement bearer value without performing authentication.
 
         Args:
-            token: Synthetic token input.
+            token: Synthetic access-token string supplied after a forced refresh.
         """
         self.tokens.append(token)
 
     def close(self):
-        """Simulate close."""
+        """Mark the fake data session as closed for cleanup assertions."""
         self.closed = True
 
 
 class FakeAuth:
-    """Simulate FakeAuth."""
+    """Record refresh requests and supply token-like objects without network or cache access."""
 
     def __init__(self, outcomes=None):
-        """Simulate init.
+        """Initialize refresh history and optional token-acquisition failures.
 
         Args:
-            outcomes: Synthetic outcomes input.
+            outcomes: Optional queue consumed by token requests; exception items fail that
+                call, other items allow a synthetic token.
         """
         self.calls = []
         self.outcomes = list(outcomes or [])
         self.closed = False
 
     def obtain_token(self, key, *, force_refresh=False):
-        """Simulate obtain token.
+        """Record refresh intent and issue a fixed synthetic bearer token.
 
         Args:
-            key: Synthetic key input.
-            force_refresh: Synthetic force refresh input.
+            key: Synthetic API key accepted without file access or authentication.
+            force_refresh: Whether the caller requested a forced exchange instead of cache
+                reuse.
 
         Returns:
-            The synthetic operation result.
+            A token-like object whose access_token is the fixed synthetic bearer string.
+
+        Raises:
+            BaseException: If the next configured authentication outcome is an exception.
         """
         self.calls.append(force_refresh)
         if self.outcomes:
@@ -123,19 +140,21 @@ class FakeAuth:
         return SimpleNamespace(access_token="synthetic-access-token")
 
     def close(self):
-        """Simulate close."""
+        """Mark the fake authentication session as closed for cleanup assertions."""
         self.closed = True
 
 
 def provider(outcomes, auth=None):
-    """Simulate provider.
+    """Build a provider wired entirely to deterministic fake transports and backoff recording.
 
     Args:
-        outcomes: Synthetic outcomes input.
-        auth: Synthetic auth input.
+        outcomes: Ordered fake data responses or exceptions.
+        auth: Optional FakeAuth instance; a fresh always-successful authenticator is
+            used when absent.
 
     Returns:
-        The synthetic operation result.
+        Tuple of provider adapter, FakeClient, FakeAuth and the list recording requested
+        sleep delays.
     """
     client = FakeClient(outcomes)
     auth = auth or FakeAuth()

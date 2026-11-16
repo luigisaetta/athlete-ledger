@@ -198,19 +198,25 @@ class PersonalProvider:
         *,
         refresh: bool = True,
     ) -> object:
-        """Retry transient failures, refreshing at most once after a data 401.
+        """Retry transient failures and refresh authentication at most once for a data 401.
 
         Args:
-            endpoint: Safe endpoint name from a fixed mapping.
-            method: Fixed HTTP verb.
-            operation: One SDK operation.
-            refresh: Whether a 401 may refresh authentication.
+            endpoint: Application-controlled endpoint name used in sanitized failure
+                messages.
+            method: HTTP verb for this call; GET attempts increment the data-request
+                counter.
+            operation: Zero-argument SDK call to invoke again after a retry or token
+                refresh.
+            refresh: Allow one forced token refresh on a 401; false for token exchanges
+                themselves.
 
         Returns:
-            The unmodified operation result.
+            The SDK call's unchanged decoded JSON value, empty-body None, or token object
+            for authentication calls.
 
         Raises:
-            ProviderError: With safe verb, endpoint and optional HTTP status only.
+            ProviderError: If authentication is rejected, a non-retryable response occurs,
+                retries are exhausted, or the SDK call otherwise fails.
         """
         retries = 0
         refreshed = False

@@ -17,14 +17,15 @@ DAY = date(2026, 1, 2)
 
 
 def norm(dataset, payload):
-    """Simulate norm.
+    """Normalize one synthetic response for the fixed single-day fixture range.
 
     Args:
-        dataset: Synthetic dataset input.
-        payload: Synthetic payload input.
+        dataset: Dataset whose field mapping should be exercised.
+        payload: Synthetic decoded response with that dataset's envelope.
 
     Returns:
-        The synthetic operation result.
+        NormalizedBatch for DAY, containing derived row dictionaries and placeholder
+        count.
     """
     return normalize(dataset, payload, DAY, DAY)
 

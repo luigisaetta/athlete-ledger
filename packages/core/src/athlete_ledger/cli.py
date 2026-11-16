@@ -26,15 +26,23 @@ from athlete_ledger.sync_types import ProviderError
 def run(
     argv: Sequence[str] | None = None, *, require_oracle: bool = False, show_banner: bool = True
 ) -> int:
-    """Execute a command, returning an exit status without printing driver errors.
+    """Parse a ledger command and report only sanitized diagnostics.
 
     Args:
-        argv: Argv for this operation.
-        require_oracle: Require oracle for this operation.
-        show_banner: Show banner for this operation.
+        argv: Command-line arguments without the executable name; None reads
+            sys.argv[1:].
+        require_oracle: Reject SQLite fallback for commands launched by the Oracle setup
+            script.
+        show_banner: Display the operation heading when stdout is an interactive
+            terminal.
 
     Returns:
-        The operation result.
+        Zero when the command succeeds, or one when a handled
+        configuration/provider/database error occurs.
+
+    Raises:
+        SystemExit: When argparse handles help, version output or invalid command
+            syntax.
     """
     parser = argparse.ArgumentParser(prog="athlete-ledger")
     parser.add_argument("--version", action="version", version=f"athlete-ledger {__version__}")
@@ -105,9 +113,9 @@ def run(
 
 
 def main() -> None:
-    """Dispatch the installed command.
+    """Exit the installed command with the dispatcher return code.
 
     Raises:
-        SystemExit: If the operation cannot be completed.
+        SystemExit: Always, carrying the command exit status returned by run.
     """
     raise SystemExit(run())

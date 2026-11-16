@@ -18,11 +18,12 @@ from athlete_ledger.settings import Settings
 
 
 def _enable_foreign_keys(connection: sqlite3.Connection, record: ConnectionPoolEntry) -> None:
-    """Enforce the same source-response references during SQLite development.
+    """Enable SQLite foreign-key checks for a newly opened DB-API connection.
 
     Args:
-        connection: Connection for this operation.
-        record: Record for this operation.
+        connection: SQLite connection received by the SQLAlchemy connect event.
+        record: Pool entry supplied by SQLAlchemy; not needed to configure the SQLite
+            pragma.
     """
     cursor = connection.cursor()
     try:
@@ -32,16 +33,20 @@ def _enable_foreign_keys(connection: sqlite3.Connection, record: ConnectionPoolE
 
 
 def create_db_engine(settings: Settings) -> Engine:
-    """Build an engine; establishing a network connection remains deferred.
+    """Construct a lazy SQLite or Oracle thin-mode mTLS engine.
 
     Args:
-        settings: Settings for this operation.
+        settings: Validated database selection, owner credentials and optional wallet
+            configuration.
 
     Returns:
-        The operation result.
+        An unconnected SQLAlchemy Engine with SQL parameters hidden; SQLite connections
+        enable foreign keys.
 
     Raises:
-        ConfigurationError: If the operation cannot be completed.
+        ConfigurationError: If Oracle thick mode is active or required mTLS settings are
+            incomplete.
+        OSError: If the parent directory for a SQLite file cannot be created.
     """
     if settings.backend == "oracle":
         if not oracledb.is_thin_mode():

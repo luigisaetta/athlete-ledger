@@ -18,10 +18,14 @@ from athlete_ledger.console import banner, ok
 
 
 def main() -> int:
-    """Create/upgrade tables using Alembic and report sanitized database status.
+    """Apply Oracle ledger migrations and verify the resulting schema revision.
 
     Returns:
-        The operation result.
+        Zero after both upgrade and check succeed, or the first nonzero dispatcher
+        status.
+
+    Raises:
+        SystemExit: When argparse handles help or invalid script arguments.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.parse_args()

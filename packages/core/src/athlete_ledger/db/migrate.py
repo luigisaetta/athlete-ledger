@@ -22,10 +22,11 @@ DialectName = Literal["oracle", "sqlite"]
 
 
 def migration_config() -> Config:
-    """Locate migrations shipped inside the installed package, without an ini URL.
+    """Locate the packaged Alembic environment without reading an ini connection URL.
 
     Returns:
-        The operation result.
+        An Alembic Config with script_location pointing to this package's migrations
+        directory.
     """
     config = Config()
     config.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
@@ -33,14 +34,15 @@ def migration_config() -> Config:
 
 
 def upgrade(engine: Engine, revision: str = "head") -> None:
-    """Apply migrations to the given engine without logging SQL parameters.
+    """Apply ledger migrations in a transaction using the supplied engine.
 
     Args:
-        engine: Engine for this operation.
-        revision: Revision for this operation.
+        engine: SQLAlchemy engine connected as the schema owner.
+        revision: Alembic target revision to apply to; defaults to head.
 
     Raises:
-        DatabaseError: If the operation cannot be completed.
+        DatabaseError: If database connection or migration SQL fails; only a sanitized
+            message and optional ORA/DPY code are retained.
     """
     try:
         with engine.begin() as connection:
@@ -55,14 +57,15 @@ def upgrade(engine: Engine, revision: str = "head") -> None:
 
 
 def downgrade(engine: Engine, revision: str = "base") -> None:
-    """Downgrade a database, primarily for disposable development databases.
+    """Revert ledger migrations, intended for disposable development databases.
 
     Args:
-        engine: Engine for this operation.
-        revision: Revision for this operation.
+        engine: SQLAlchemy engine connected as the schema owner.
+        revision: Alembic target revision to revert to; defaults to base.
 
     Raises:
-        DatabaseError: If the operation cannot be completed.
+        DatabaseError: If database connection or migration SQL fails; only a sanitized
+            message and optional ORA/DPY code are retained.
     """
     try:
         with engine.begin() as connection:
@@ -74,13 +77,14 @@ def downgrade(engine: Engine, revision: str = "base") -> None:
 
 
 def offline_sql(dialect: DialectName = "oracle") -> str:
-    """Render all upgrades without settings, credentials or a database connection.
+    """Render the complete upgrade path without connecting to a database.
 
     Args:
-        dialect: Dialect for this operation.
+        dialect: Target SQL dialect: oracle by default, or sqlite.
 
     Returns:
-        The operation result.
+        The Alembic upgrade SQL with trailing whitespace removed and exactly one final
+        newline.
     """
     buffer = StringIO()
     config = migration_config()
@@ -100,16 +104,19 @@ class DatabaseStatus:
 
 
 def check_database(engine: Engine) -> DatabaseStatus:
-    """Connect and report backend, server version and the applied migration.
+    """Read backend version and Alembic revision without accessing ledger payloads.
 
     Args:
-        engine: Engine for this operation.
+        engine: SQLAlchemy engine whose connectivity and current schema revision should
+            be checked.
 
     Returns:
-        The operation result.
+        DatabaseStatus containing backend name, server version and current revision, or
+        None for the revision of an unversioned schema.
 
     Raises:
-        DatabaseError: If the operation cannot be completed.
+        DatabaseError: If connection or Alembic revision inspection fails; raw driver
+            diagnostics are discarded.
     """
     try:
         with engine.connect() as connection:

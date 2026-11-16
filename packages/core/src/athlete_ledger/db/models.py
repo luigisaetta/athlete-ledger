@@ -26,10 +26,10 @@ from athlete_ledger.db.types import JSONDocument, JSONValue, UTCDateTime
 
 
 def utc_now() -> datetime:
-    """Return an aware fetch/update timestamp.
+    """Create a current UTC timestamp for fetch, update and synchronization metadata.
 
     Returns:
-        The operation result.
+        A timezone-aware datetime with UTC tzinfo.
     """
     return datetime.now(UTC)
 

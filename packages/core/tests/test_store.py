@@ -43,13 +43,15 @@ ROOT = Path(__file__).resolve().parents[3]
 
 
 def raw_response(**kwargs: object) -> RawResponse:
-    """Handle raw response.
+    """Build an unpersisted provenance row with a synthetic nested JSON document.
 
     Args:
-        **kwargs: Kwargs for this operation.
+        **kwargs: RawResponse field overrides applied after the standard synthetic
+            defaults.
 
     Returns:
-        The operation result.
+        A new RawResponse ORM instance, not yet attached to a session or assigned an
+        identity.
     """
     values = dict(
         provider="synthetic",

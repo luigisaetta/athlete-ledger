@@ -14,13 +14,13 @@ from athlete_ledger.db.migrate import offline_sql
 
 
 class Terminal(io.StringIO):
-    """Handle Terminal."""
+    """Provide an in-memory stdout stream that reports interactive-terminal capabilities."""
 
     def isatty(self) -> bool:
-        """Handle isatty.
+        """Report an interactive stream to exercise ANSI color and banner branches.
 
         Returns:
-            The operation result.
+            True regardless of the host test runner's actual terminal.
         """
         return True
 

@@ -67,14 +67,15 @@ def test_cli_driver_error_is_sanitized(
     """Verify cli driver error is sanitized."""
 
     def failed(*args: object, **kwargs: object) -> None:
-        """Handle failed.
+        """Raise a database error carrying synthetic private text for output-redaction checks.
 
         Args:
-            *args: Args for this operation.
-            **kwargs: Kwargs for this operation.
+            *args: Ignored arguments from the mocked database check.
+            **kwargs: Ignored database-check keyword arguments.
 
         Raises:
-            DatabaseError: If the operation cannot be completed.
+            DatabaseError: Always, with synthetic password/payload markers that must not
+                reach CLI output.
         """
         raise DatabaseError("synthetic-password synthetic-health-payload")
 
@@ -149,10 +150,11 @@ def test_cli_field_validation_prints_only_allowlisted_names(
     from pydantic import ValidationError
 
     def invalid() -> Settings:
-        """Handle invalid.
+        """Trigger validation for a list supplied to a scalar setting.
 
-        Returns:
-            The operation result.
+        Raises:
+            ValidationError: Always, for the selected field containing synthetic private
+                values.
         """
         return Settings(**{field: ["synthetic-password", "synthetic-value"]})
 
@@ -164,10 +166,11 @@ def test_cli_field_validation_prints_only_allowlisted_names(
 
     # Unknown error locations and contexts must not be echoed as environment names.
     def unknown() -> None:
-        """Handle unknown.
+        """Raise a validation error with an unrecognized location and private context.
 
         Raises:
-            ValidationError.from_exception_data: If the operation cannot be completed.
+            ValidationError: Always, to verify that unknown locations and context values are
+                not echoed.
         """
         raise ValidationError.from_exception_data(
             "Settings",
@@ -200,14 +203,15 @@ def test_cli_preserves_only_database_codes_through_wrappers(
     from sqlalchemy.exc import OperationalError
 
     def fail_connect(*args: object, **kwargs: object) -> None:
-        """Handle fail connect.
+        """Raise a wrapped driver error containing both a code and private diagnostic markers.
 
         Args:
-            *args: Args for this operation.
-            **kwargs: Kwargs for this operation.
+            *args: Ignored SQLAlchemy connection arguments.
+            **kwargs: Ignored SQLAlchemy connection options.
 
         Raises:
-            OperationalError: If the operation cannot be completed.
+            OperationalError: Always, wrapping synthetic driver text, SQL and bound
+                parameters.
         """
         message = f"{code or 'driver failure'}: synthetic-password synthetic-private-dsn"
         raise OperationalError(
@@ -240,14 +244,17 @@ def test_cli_structured_driver_codes_without_message_or_sql(
     from sqlalchemy.exc import OperationalError
 
     def failed(*args: object, **kwargs: object) -> None:
-        """Handle failed.
+        """Raise a structured driver error, optionally wrapped by SQLAlchemy.
 
         Args:
-            *args: Args for this operation.
-            **kwargs: Kwargs for this operation.
+            *args: Ignored database-check arguments.
+            **kwargs: Ignored database-check options.
 
         Raises:
-            OperationalError: If the operation cannot be completed.
+            OperationalError: If the test requests a SQLAlchemy wrapper around the driver
+                error.
+            oracledb.DatabaseError: Otherwise, with a structured code and synthetic private
+                message.
         """
         original = oracledb.DatabaseError(
             SimpleNamespace(
@@ -277,14 +284,15 @@ def test_cli_os_error_type_without_message_or_filename(
     """Verify cli os error type without message or filename."""
 
     def failed(*args: object, **kwargs: object) -> None:
-        """Handle failed.
+        """Raise the parameterized filesystem error with private message/path markers.
 
         Args:
-            *args: Args for this operation.
-            **kwargs: Kwargs for this operation.
+            *args: Ignored engine-factory arguments.
+            **kwargs: Ignored engine-factory options.
 
         Raises:
-            error_type: If the operation cannot be completed.
+            OSError: Always, using the selected subclass to test type-only filesystem
+                diagnostics.
         """
         raise error_type(
             None, "synthetic-password synthetic-health-value", "/synthetic/private/wallet"

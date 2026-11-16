@@ -29,10 +29,11 @@ TABLE_NAMES = (
 
 
 def _reader_privileges(action: str) -> None:
-    """Grant/revoke the read-only role on ledger and revision tables.
+    """Grant or revoke reader-role SELECT privileges when running on Oracle.
 
     Args:
-        action: Action for this operation.
+        action: Use grant to add SELECT on every ledger/revision table; any other value
+            selects revocation during downgrade.
     """
     if op.get_context().dialect.name == "oracle":
         for table in TABLE_NAMES:

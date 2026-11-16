@@ -12,11 +12,12 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def isolated_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Handle isolated configuration.
+    """Isolate each core test from process credentials, real databases and repository settings.
 
     Args:
-        monkeypatch: Monkeypatch for this operation.
-        tmp_path: Tmp path for this operation.
+        monkeypatch: Pytest fixture restoring environment, cwd and driver replacements
+            after the test.
+        tmp_path: Per-test working directory for synthetic settings and SQLite files.
     """
     import os
 
@@ -27,11 +28,16 @@ def isolated_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
     monkeypatch.chdir(tmp_path)
 
     def reject_oracle_connection(*args: object, **kwargs: object) -> None:
-        """Handle reject oracle connection.
+        """Fail immediately if a test attempts an Oracle connection or client initialization.
 
         Args:
-            *args: Args for this operation.
-            **kwargs: Kwargs for this operation.
+            *args: Ignored positional driver arguments; no values are rendered.
+            **kwargs: Ignored keyword driver arguments, which may contain synthetic
+                credentials.
+
+        Raises:
+            pytest.fail.Exception: Always, because live Oracle connections are forbidden in
+                unit tests.
         """
         pytest.fail("Tests must never connect to Oracle.")
 

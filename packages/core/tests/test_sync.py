@@ -26,12 +26,12 @@ NOW = datetime(2026, 1, 29, 12, tzinfo=UTC)
 
 
 class FakeProvider:
-    """Simulate FakeProvider."""
+    """Generate deterministic summary records and configurable failures without SDK access."""
 
     sdk_version = "synthetic-1.0"
 
     def __init__(self):
-        """Simulate init."""
+        """Initialize request history, per-day overrides, empty-response and failure controls."""
         self.request_count = 0
         self.calls = []
         self.changes = {}
@@ -41,15 +41,19 @@ class FakeProvider:
         self.closed = False
 
     def responses(self, dataset, start, end):
-        """Simulate responses.
+        """Generate dated summary payloads and an empty terminating activity page.
 
         Args:
-            dataset: Synthetic dataset input.
-            start: Synthetic start input.
-            end: Synthetic end input.
+            dataset: Supported dataset determining the synthetic record fields and envelope.
+            start: Inclusive first date for generated records.
+            end: Inclusive last date for generated records.
 
         Yields:
-            Synthetic response records.
+            Response objects with synthetic payloads and SDK-call parameters; nonempty
+            activities add an empty terminal page.
+
+        Raises:
+            ProviderError: If dataset and start match the configured failing chunk.
         """
         self.request_count += 1
         self.calls.append((dataset, start, end))
@@ -92,19 +96,19 @@ class FakeProvider:
             yield Response(ENDPOINTS[dataset], {**params, "start": 100}, [])
 
     def close(self):
-        """Simulate close."""
+        """Mark the fake provider closed so CLI cleanup can be asserted."""
         self.closed = True
 
 
 @pytest.fixture
 def engine(tmp_path):
-    """Simulate engine.
+    """Provide a migrated temporary SQLite ledger and dispose it after the test.
 
     Args:
-        tmp_path: Synthetic tmp path input.
+        tmp_path: Per-test directory containing the synthetic.db file.
 
     Yields:
-        Synthetic response records.
+        A SQLAlchemy Engine with the initial ledger migration applied.
     """
     instance = create_db_engine(
         Settings(db_url=f"sqlite:///{tmp_path / 'synthetic.db'}", _env_file=None)
@@ -115,17 +119,18 @@ def engine(tmp_path):
 
 
 def backfill(engine, provider, days=14, datasets=DATASETS, clock=lambda: NOW):
-    """Simulate backfill.
+    """Run a synthetic backfill starting at DAY with a deterministic local end-date ceiling.
 
     Args:
-        engine: Synthetic engine input.
-        provider: Synthetic provider input.
-        days: Synthetic days input.
-        datasets: Synthetic datasets input.
-        clock: Synthetic clock input.
+        engine: Migrated temporary SQLite engine.
+        provider: Fake response provider and request counter.
+        days: Inclusive range length starting at DAY; defaults to fourteen days.
+        datasets: Dataset names to synchronize, in processing order.
+        clock: Aware timestamp callable for raw provenance and sync-state updates.
 
     Returns:
-        The synthetic operation result.
+        DatasetResult list from synchronize, with committed counters and safe failure
+        information.
     """
     return synchronize(
         engine,
@@ -139,14 +144,14 @@ def backfill(engine, provider, days=14, datasets=DATASETS, clock=lambda: NOW):
 
 
 def count(session, model):
-    """Simulate count.
+    """Count rows for an ORM model in the current test transaction.
 
     Args:
-        session: Synthetic session input.
-        model: Synthetic model input.
+        session: Open SQLAlchemy session used to execute the aggregate SELECT.
+        model: Mapped ORM class whose table rows should be counted.
 
     Returns:
-        The synthetic operation result.
+        The number of rows in the model table.
     """
     return session.scalar(select(func.count()).select_from(model))
 
@@ -243,18 +248,23 @@ def test_failure_after_first_page_rolls_back_entire_chunk(engine):
     """Verify failure after first page rolls back entire chunk."""
 
     class BrokenPages(FakeProvider):
-        """Simulate BrokenPages."""
+        """Fail after yielding parent pages to test rollback before the chunk commit."""
 
         def responses(self, dataset, start, end):
-            """Simulate responses.
+            """Yield all parent responses and then interrupt the same uncommitted chunk.
 
             Args:
-                dataset: Synthetic dataset input.
-                start: Synthetic start input.
-                end: Synthetic end input.
+                dataset: Dataset forwarded to the parent fake provider.
+                start: Inclusive chunk start forwarded to the parent.
+                end: Inclusive chunk end forwarded to the parent.
 
             Yields:
-                Synthetic response records.
+                The parent provider's synthetic response pages, including its activity
+                terminator.
+
+            Raises:
+                RuntimeError: Always after the parent iterator completes, simulating a late
+                    chunk failure.
             """
             yield from super().responses(dataset, start, end)
             raise RuntimeError("SYNTHETIC-PRIVATE-FAILURE")
@@ -307,18 +317,21 @@ def test_activity_duplicates_across_pages_are_deduplicated(engine):
     """Verify activity duplicates across pages are deduplicated."""
 
     class Pages(FakeProvider):
-        """Simulate Pages."""
+        """Supply overlapping activity pages to exercise chunk-level ID deduplication."""
 
         def responses(self, dataset, start, end):
-            """Simulate responses.
+            """Yield two overlapping activity pages followed by an empty terminal page.
 
             Args:
-                dataset: Synthetic dataset input.
-                start: Synthetic start input.
-                end: Synthetic end input.
+                dataset: Activities dataset whose fixed endpoint name labels the pages.
+                start: Requested chunk start; accepted for the provider interface but not used
+                    by the fixed records.
+                end: Requested chunk end; accepted for the provider interface but not used by
+                    the fixed records.
 
             Yields:
-                Synthetic response records.
+                Three Response objects with activity IDs [1, 2], [2, 3] and an empty final
+                payload.
             """
             self.request_count += 3
             for offset, ids in [(0, [1, 2]), (100, [2, 3]), (200, [])]:
