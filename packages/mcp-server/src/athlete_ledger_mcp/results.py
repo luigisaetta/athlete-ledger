@@ -8,7 +8,7 @@ Description: Typed structured data returned by the four read-only ledger tools.
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DateInterval(BaseModel):
@@ -53,6 +53,63 @@ class LedgerStatus(BaseModel):
     sports: list[SportCount]
 
 
+class TrainingMetrics(BaseModel):
+    """Provider-owned per-activity training values with no interpretation or derived scores."""
+
+    aerobic_effect: float | None = Field(
+        description="Provider aerobic effect, dimensionless 0–5; 1 decimal; null if missing."
+    )
+    anaerobic_effect: float | None = Field(
+        description="Provider anaerobic effect, dimensionless 0–5; 1 decimal; null if missing."
+    )
+    effect_label: str | None = Field(
+        description="Provider label as stored, unitless text; null if missing; no interpretation."
+    )
+    load: float | None = Field(
+        description="Provider training-load units, 1 decimal; null if missing."
+    )
+    stress_score: float | None = Field(
+        description="Provider training stress score in TSS points, 1 decimal; null if missing."
+    )
+    intensity_factor: float | None = Field(
+        description="Provider intensity factor, dimensionless ratio, 2 decimals; null if missing."
+    )
+    normalized_power_w: float | None = Field(
+        description="Provider normalized power in watts, 0 decimals; null if missing."
+    )
+
+
+class IntensityMinutes(BaseModel):
+    """Separate moderate/vigorous minutes, never combined or weighted into a derived score."""
+
+    moderate: int | None = Field(
+        description="Moderate-intensity minutes, integer; null if no value is available."
+    )
+    vigorous: int | None = Field(
+        description="Vigorous-intensity minutes, integer; null if no value is available."
+    )
+
+
+class HeartRateZoneMinutes(BaseModel):
+    """Per-activity time in each provider heart-rate zone, converted to minutes."""
+
+    zone_1: float | None = Field(
+        description="Time in heart-rate zone 1, minutes, 1 decimal; null if missing."
+    )
+    zone_2: float | None = Field(
+        description="Time in heart-rate zone 2, minutes, 1 decimal; null if missing."
+    )
+    zone_3: float | None = Field(
+        description="Time in heart-rate zone 3, minutes, 1 decimal; null if missing."
+    )
+    zone_4: float | None = Field(
+        description="Time in heart-rate zone 4, minutes, 1 decimal; null if missing."
+    )
+    zone_5: float | None = Field(
+        description="Time in heart-rate zone 5, minutes, 1 decimal; null if missing."
+    )
+
+
 class ActivityData(BaseModel):
     """Activity summary with explicit units and provider-local naive start time."""
 
@@ -63,6 +120,33 @@ class ActivityData(BaseModel):
     duration_min: float | None
     avg_hr_bpm: float | None
     calories_kcal: float | None
+    moving_duration_min: float | None = Field(
+        description="Moving duration in minutes, 1 decimal; null if missing."
+    )
+    avg_speed_kmh: float | None = Field(
+        description="Average speed in km/h (stored m/s × 3.6), 1 decimal; null if missing."
+    )
+    max_hr_bpm: float | None = Field(
+        description="Maximum heart rate in beats/minute, 1 decimal; null if missing."
+    )
+    elevation_gain_m: float | None = Field(
+        description="Elevation gained in metres, 1 decimal; null if missing."
+    )
+    elevation_loss_m: float | None = Field(
+        description="Elevation lost in metres, 1 decimal; null if missing."
+    )
+    training: TrainingMetrics = Field(
+        description=(
+            "Provider effects (0–5), load units, TSS points, IF ratio and watts; "
+            "always present with nullable members."
+        )
+    )
+    intensity_minutes: IntensityMinutes = Field(
+        description="Moderate/vigorous integer minutes; always present with nullable members."
+    )
+    hr_zone_min: HeartRateZoneMinutes = Field(
+        description="Per-zone time in minutes, 1 decimal; always present with nullable members."
+    )
 
 
 class NamedActivityData(ActivityData):
