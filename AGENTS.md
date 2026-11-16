@@ -487,7 +487,7 @@ Use the same SQLAlchemy type style as the existing metric columns (`Mapped[float
 Acceptance: local checks pass; the maintainer upgrades ADB as the owner, `db check` shows
 `0002_activity_training_metrics`, and `sync run` and the MCP server keep working.
 
-### Activity training metrics, part 2 (current): mapping and rebuild
+### Activity training metrics, part 2 (done): mapping and rebuild
 
 Branch `activity-metrics-rebuild`. Scope: the `core` package only (normalization, storage, sync
 CLI). No schema changes, no MCP changes (part 3), no provider calls in the new command. Decisions
@@ -567,6 +567,53 @@ a new download; the upsert logic is shared between sync and rebuild, not duplica
 Acceptance: local checks pass; the maintainer runs `athlete-ledger sync rebuild` on ADB as the
 owner, then a second rebuild reporting zero updates; the new activity columns are populated
 (checked by counts only).
+
+### Activity training metrics, part 3 (current): MCP exposure
+
+Branch `activity-metrics-mcp`. Scope: the `mcp-server` package only. No schema, normalization or
+sync changes; no new tools. Decisions already taken (do not revisit): the server still returns
+**data, not analysis**: values are exposed as stored (with unit conversion and rounding only), and
+totals are plain sums. No averages of training effect or intensity factor, no derived scores
+(e.g. no "intensity minutes = moderate + 2 × vigorous", no acute/chronic load), no
+interpretation of labels. Existing field names and meanings stay unchanged (additive change).
+
+1. **`list_activities`**: add to each activity (names and units exactly as listed):
+   - `moving_duration_min` (1 decimal), `avg_speed_kmh` (from m/s × 3.6, 1 decimal),
+     `max_hr_bpm` (1 decimal), `elevation_gain_m`, `elevation_loss_m` (1 decimal);
+   - `training`: object with `aerobic_effect`, `anaerobic_effect` (0.0–5.0, 1 decimal),
+     `effect_label` (provider label string, as stored), `load` (1 decimal),
+     `stress_score` (TSS, 1 decimal), `intensity_factor` (2 decimals),
+     `normalized_power_w` (0 decimals);
+   - `intensity_minutes`: object with `moderate`, `vigorous` (integers);
+   - `hr_zone_min`: object with `zone_1` … `zone_5` (minutes in each heart-rate zone, 1 decimal).
+   Every value may be `null`; the nested objects are always present (with null members) so the
+   shape is stable. Keep the `activity_name` opt-in behaviour unchanged.
+2. **`activity_totals`**: add to every group and to `overall` the plain sums
+   `training_load` (1 decimal), `training_stress_score` (1 decimal), `moving_duration_h`
+   (2 decimals), `elevation_gain_m` (1 decimal), `intensity_minutes` (`moderate`, `vigorous`,
+   integers) and `hr_zone_h` (`zone_1` … `zone_5`, hours, 2 decimals). Same null rules as the
+   existing sums (nulls skipped; all-null or empty → null), and extend `missing` with the count of
+   activities lacking `training_load`, `training_stress_score`, `moving_duration`,
+   `elevation_gain` and HR zones (an activity lacks zones if all five are null).
+3. **Schemas and descriptions**: give every new output field a `Field(description=...)` with
+   its unit (they appear in the tool `outputSchema`). Update the tool descriptions: list the new
+   fields and units, say that training effect and load are the provider's own per-activity values,
+   that TSS/IF/normalized power exist mostly for power-meter activities, and that totals are sums
+   only. Keep descriptions concise; no Args/Returns/Raises text.
+4. **Queries**: select only the needed `activity` columns; never `raw_response`, never names
+   unless enabled. No change to the read-only engine.
+5. **Tests** (synthetic SQLite only): every new field with unit conversion and rounding
+   (including m/s → km/h and seconds → minutes/hours); null members and stable nested shape; sums
+   and new `missing` counts per group and overall, including all-null groups; existing fields
+   unchanged; `outputSchema` contains the new fields with descriptions; tool descriptions mention
+   the new units and contain no Args/Raises text; no excluded field (GPS, location, owner, device)
+   in any output; names still absent by default.
+6. **Docs**: README "MCP server": the new fields with units, and a note that these values come
+   from the provider and are summed, not interpreted.
+
+Acceptance: local checks pass; the maintainer asks real questions through the MCP Inspector or a
+desktop client (e.g. weekly training load over the last month, time in heart-rate zones per
+week) on ADB as `ATHLETE_LEDGER_RO`.
 
 ## Coding conventions
 
