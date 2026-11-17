@@ -643,4 +643,7 @@ week) on ADB as `ATHLETE_LEDGER_RO`.
 - Timezone-aware datetimes for fetch timestamps; calendar dates as `datetime.date`.
 - Errors: explicit exception types per package; never swallow exceptions silently.
 - Commits: Conventional Commits (`feat:`, `fix:`, `chore:`, `docs:`, `test:`).
-- Keep README and `.env.example` in sync with behaviour.
+- Keep the documentation and `.env.example` in sync with behaviour. The README is an overview
+  (goals, status, architecture, documentation index): keep its status table current, and put
+  details in the dedicated guides under `docs/` (`quickstart.md`, `database.md`,
+  `oracle-adb-setup.md`, `sync.md`, `mcp-server.md`, `development.md`).
