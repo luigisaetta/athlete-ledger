@@ -617,7 +617,7 @@ Acceptance: local checks pass; the maintainer asks real questions through the MC
 desktop client (e.g. weekly training load over the last month, time in heart-rate zones per
 week) on ADB as `ATHLETE_LEDGER_RO`.
 
-### Multisport legs, part 1 (current): store the legs
+### Multisport legs, part 1 (done): store the legs
 
 Branch `multisport-legs-store`. Scope: the `core` package (schema, provider access,
 normalization, sync, rebuild). No MCP changes (part 2). Decisions already taken (do not revisit):
@@ -719,7 +719,7 @@ factor fields, and some names differ from the list record (`trainingEffect`, `no
 Acceptance: local checks pass; the maintainer upgrades ADB, runs `athlete-ledger sync legs` and
 checks by counts that each `multi_sport` activity has as many legs as its `childIds`.
 
-### Multisport legs, part 2: MCP exposure
+### Multisport legs, part 2 (current): MCP exposure
 
 Branch `multisport-legs-mcp`. Scope: the `mcp-server` package only; additive change.
 

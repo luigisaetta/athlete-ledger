@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Register exactly four read-only data tools with the official MCP server.
 """  # noqa: D205, D212
@@ -116,6 +116,13 @@ def create_server(
         separate moderate/vigorous integers; hr_zone_min has zone_1–zone_5 minutes (1).
         No scores or label interpretations are derived. Null means unavailable; zero
         is valid; nested objects are always present. Names require server opt-in.
+        Each activity has legs ordered by leg_index; transitions have sport transition_v2.
+        Legs use the same km, minutes, beats/minute, kcal, km/h, metres, effects, load
+        and watts units and rounding as matching activity fields. Their training has
+        aerobic_effect, anaerobic_effect, effect_label, load and normalized_power_w;
+        intensity_minutes has moderate/vigorous integers. Legs have no names, TSS, IF
+        or HR zones. Legs are empty until athlete-ledger sync legs has run, and for
+        activities without stored legs. Sport filtering and limits apply to parents only.
         """).strip(),
         annotations=annotations,
         structured_output=True,
@@ -203,6 +210,7 @@ def create_server(
         scores. Nulls are skipped; empty/all-null sums are null. Zero is valid and
         nested objects are always present. Missing counts include load, TSS, moving
         duration, elevation gain and all-five-null HR zones. Return clipped coverage.
+        A multisport activity counts once, with the totals of all its legs.
         """).strip(),
         annotations=annotations,
         structured_output=True,

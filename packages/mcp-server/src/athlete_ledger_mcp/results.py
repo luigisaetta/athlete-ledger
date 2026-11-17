@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Typed structured data returned by the four read-only ledger tools.
 """  # noqa: D205, D212
@@ -114,6 +114,91 @@ class HeartRateZoneMinutes(BaseModel):
     )
 
 
+class LegTrainingMetrics(BaseModel):
+    """Provider training values available for legs, without TSS or intensity factor."""
+
+    aerobic_effect: float | None = Field(
+        description="Provider aerobic effect, dimensionless 0–5; 1 decimal; null if missing."
+    )
+
+    anaerobic_effect: float | None = Field(
+        description="Provider anaerobic effect, dimensionless 0–5; 1 decimal; null if missing."
+    )
+
+    effect_label: str | None = Field(
+        description="Provider label as stored, unitless text; null if missing; no interpretation."
+    )
+
+    load: float | None = Field(
+        description="Provider training-load units, 1 decimal; null if missing."
+    )
+
+    normalized_power_w: float | None = Field(
+        description="Provider normalized power in watts, 0 decimals; null if missing."
+    )
+
+
+class LegData(BaseModel):
+    """Ordered multisport leg or transition with the same units as its parent summary."""
+
+    activity_id: int = Field(description="Provider activity identifier, unitless integer.")
+
+    leg_index: int = Field(
+        description="Zero-based position in the parent's childIds, unitless integer."
+    )
+
+    sport: str | None = Field(description="Provider sport type, unitless text; null if unknown.")
+
+    start_time_local: datetime | None = Field(
+        description="Activity start as ISO local wall time, without a timezone."
+    )
+
+    distance_km: float | None = Field(
+        description="Distance in kilometres, 2 decimals; null if missing."
+    )
+
+    duration_min: float | None = Field(
+        description="Duration in minutes, 1 decimal; null if missing."
+    )
+
+    moving_duration_min: float | None = Field(
+        description="Moving duration in minutes, 1 decimal; null if missing."
+    )
+
+    avg_hr_bpm: float | None = Field(
+        description="Average heart rate in beats/minute, 1 decimal; null if missing."
+    )
+
+    max_hr_bpm: float | None = Field(
+        description="Maximum heart rate in beats/minute, 1 decimal; null if missing."
+    )
+
+    calories_kcal: float | None = Field(description="Energy in kilocalories; null if missing.")
+
+    avg_speed_kmh: float | None = Field(
+        description="Average speed in km/h (stored m/s × 3.6), 1 decimal; null if missing."
+    )
+
+    elevation_gain_m: float | None = Field(
+        description="Elevation gained in metres, 1 decimal; null if missing."
+    )
+
+    elevation_loss_m: float | None = Field(
+        description="Elevation lost in metres, 1 decimal; null if missing."
+    )
+
+    training: LegTrainingMetrics = Field(
+        description=(
+            "Provider effects (0–5), label, load units and watts; "
+            "always present with nullable members."
+        )
+    )
+
+    intensity_minutes: IntensityMinutes = Field(
+        description="Moderate/vigorous integer minutes; always present with nullable members."
+    )
+
+
 class ActivityData(BaseModel):
     """Activity summary with explicit units and provider-local naive start time."""
 
@@ -158,6 +243,15 @@ class ActivityData(BaseModel):
     )
     hr_zone_min: HeartRateZoneMinutes = Field(
         description="Per-zone time in minutes, 1 decimal; always present with nullable members."
+    )
+
+    legs: list[LegData] = Field(
+        description=(
+            "Multisport legs ordered by leg_index; transitions have sport transition_v2. "
+            "Empty for non-multisport activities or until athlete-ledger sync legs has run. "
+            "Distances km, durations/intensity minutes, HR beats/minute, energy kcal, "
+            "speed km/h, elevation metres; training effects 0–5, load units and watts."
+        )
     )
 
 
