@@ -568,7 +568,7 @@ Acceptance: local checks pass; the maintainer runs `athlete-ledger sync rebuild`
 owner, then a second rebuild reporting zero updates; the new activity columns are populated
 (checked by counts only).
 
-### Activity training metrics, part 3 (current): MCP exposure
+### Activity training metrics, part 3 (done): MCP exposure
 
 Branch `activity-metrics-mcp`. Scope: the `mcp-server` package only. No schema, normalization or
 sync changes; no new tools. Decisions already taken (do not revisit): the server still returns
@@ -616,6 +616,132 @@ interpretation of labels. Existing field names and meanings stay unchanged (addi
 Acceptance: local checks pass; the maintainer asks real questions through the MCP Inspector or a
 desktop client (e.g. weekly training load over the last month, time in heart-rate zones per
 week) on ADB as `ATHLETE_LEDGER_RO`.
+
+### Multisport legs, part 1 (current): store the legs
+
+Branch `multisport-legs-store`. Scope: the `core` package (schema, provider access,
+normalization, sync, rebuild). No MCP changes (part 2). Decisions already taken (do not revisit):
+
+- The provider's activity list (`search_activities`) returns a multisport activity
+  (`activityType.typeKey = "multi_sport"`, `parent: true`) as **one summary with the totals of
+  all its legs**; the legs are not in the list and the summary carries no leg identifiers.
+- The legs are read with the SDK's `get_activity(activity_id)`: the parent's detail lists them in
+  `metadataDTO.childIds`; each leg's detail is a complete activity with `parentId`,
+  `activityTypeDTO.typeKey` and a `summaryDTO`. Transitions are legs too
+  (`typeKey = "transition_v2"`).
+- Legs go to a **separate table** `activity_leg`, never to `activity`: the parent already holds
+  the totals, so `activity`, `list_activities` and `activity_totals` stay unchanged and nothing is
+  counted twice. The hierarchy is the foreign key leg → parent.
+
+Verified on 2026-11-17 against the maintainer's account (field names
+and counts only, no values): 5 `multi_sport` activities in the ledger with `lapCount` 2–5 and no
+leg identifiers; one parent detail with 5 `childIds` (running, transition_v2, cycling,
+transition_v2, running), already in start order; every leg with `parentId` equal to the parent and
+`isMultiSportParent: false`. The leg `summaryDTO` has **no** heart-rate zone, TSS or intensity
+factor fields, and some names differ from the list record (`trainingEffect`, `normalizedPower`).
+
+1. **Schema**: migration `0003_activity_legs` (`down_revision = "0002_activity_training_metrics"`),
+   models kept identical, generated Oracle DDL regenerated, reader grant on the new table (same
+   pattern as `0001`; downgrade revokes it and drops the table). Table `activity_leg`:
+
+   | Column | Type | Notes |
+   |---|---|---|
+   | `provider`, `activity_id` | string(64), bigint | primary key; the leg's own provider id |
+   | `parent_activity_id` | bigint, not null | with `provider`, foreign key to `activity`; indexed |
+   | `leg_index` | integer, not null | 0-based position in the parent's `childIds` |
+   | `start_time_local` | datetime, no timezone | `summaryDTO.startTimeLocal`; accept ISO 8601 with `T` or a space and optional fractional seconds; a value with a timezone offset is an unexpected response |
+   | `activity_type` | string(128) | `activityTypeDTO.typeKey` |
+   | `distance_m`, `duration_s`, `moving_duration_s` | float | `distance`, `duration`, `movingDuration` |
+   | `avg_hr_bpm`, `max_hr_bpm`, `calories_kcal` | float | `averageHR`, `maxHR`, `calories` |
+   | `avg_speed_mps` | float | `averageSpeed` (metres per second) |
+   | `elevation_gain_m`, `elevation_loss_m` | float | `elevationGain`, `elevationLoss` |
+   | `aerobic_training_effect`, `anaerobic_training_effect` | float | `trainingEffect`, `anaerobicTrainingEffect` (0.0–5.0) |
+   | `training_effect_label` | string(64) | `trainingEffectLabel` |
+   | `training_load` | float | `activityTrainingLoad` |
+   | `normalized_power_w` | float | `normalizedPower` |
+   | `moderate_intensity_min`, `vigorous_intensity_min` | integer | `moderateIntensityMinutes`, `vigorousIntensityMinutes` |
+   | `source_response_id`, `updated_at` | as `SourceRecord` | provenance of the leg's detail response |
+
+   Same value rules as the activity mapping (missing, non-numeric, boolean, non-finite or
+   negative → NULL; zero is valid; training effect outside 0–5 → NULL; label never truncated).
+   **Never** store leg names, GPS (`startLatitude`, `endLatitude`, …), `locationName`, owner,
+   device, or any field not in the table: they stay only in `raw_response`.
+
+2. **Provider and raw storage**: `PersonalProvider.activity_detail(activity_id)` calls the SDK's
+   `get_activity` through the existing retry, backoff and token boundary and returns one
+   `Response` like the dataset pages. Store every detail (parents and legs) as a `raw_response`
+   row with the same fields as the dataset pages (`content_sha256`, `sdk_version`, `is_empty`,
+   `fetched_at`) through a function next to `store_response`; upsert legs with the existing
+   `upsert_row`. Raw rows: `endpoint = "get_activity"`, `params = {"activity_id": <id>}`,
+   `range_start = range_end =` the parent's local start date.
+   **Legs are not a dataset**: `DATASETS` is unchanged, there is no `sync_state` row for them,
+   and `get_activity` rows never count as coverage (`sync coverage` and `ledger_status` read only
+   the four dataset endpoints; add a test).
+
+3. **Sync of legs** (`athlete_ledger/legs.py` or similar), run by `sync run` and `sync backfill`
+   after the activities dataset **when `activities` is among the selected datasets**, and on its
+   own by a new `athlete-ledger sync legs [--refresh]` (no `--dataset` option):
+   - select the stored `multi_sport` parents that have **no stored parent-detail raw row** (a
+     parent with zero legs is therefore not fetched again on every run); `--refresh` selects all
+     `multi_sport` parents;
+   - for each: fetch the parent detail, read `metadataDTO.childIds` (missing or empty → zero legs,
+     not an error), fetch each leg's detail, normalize and upsert (`leg_index` from the `childIds`
+     order);
+   - unexpected responses fail that parent: a detail that is not an object or has no
+     `summaryDTO`, a leg whose `parentId` differs from the parent, a leg id already stored under
+     another parent, an invalid timestamp. Messages name the endpoint only, never values;
+   - one transaction per parent (raw rows and legs together): a failure rolls back that parent
+     only, the others go on, the command exits non-zero; the next run retries it;
+   - output, counts only: parents checked, detail requests, legs inserted, updated, unchanged,
+     parents failed. `sync status` also shows the number of stored legs.
+
+4. **Rebuild**: `sync rebuild` re-derives `activity_leg` from the stored `get_activity` rows
+   (parent details give the order, leg details the values), after `activities`, last applied wins
+   as for the other datasets; no provider, no network, one transaction for the legs. `legs` is
+   accepted by `sync rebuild --dataset` only (not by `backfill` or `run`), and the default rebuild
+   includes it.
+
+5. **Tests** (SQLite, synthetic fixtures only): migration up/down and model parity; grants in the
+   offline Oracle DDL; mapping of every column including the value rules and the excluded fields;
+   sync with a fake provider (parents without legs only; `--refresh`; a leg whose `parentId`
+   differs, or a leg already under another parent → that parent fails and rolls back; empty
+   `childIds` → zero legs and not fetched again without `--refresh`; no legs step when
+   `activities` is not selected; `legs` refused by `backfill`/`run --dataset`); one transaction
+   per parent;
+   rebuild from raw rows gives the same rows and a second rebuild changes nothing; coverage and
+   `ledger_status` ignore `get_activity` rows; CLI output has no values; existing tests unchanged.
+
+6. **Docs** (the README is now an overview; the details live in `docs/`): `docs/sync.md` (what
+   `sync legs` does, that it makes 1 + N requests per multisport activity, `--refresh`, and the
+   `legs` rebuild), `docs/database.md` and `docs/oracle-adb-setup.md` (head revision
+   `0003_activity_legs` and the upgrade note).
+
+Acceptance: local checks pass; the maintainer upgrades ADB, runs `athlete-ledger sync legs` and
+checks by counts that each `multi_sport` activity has as many legs as its `childIds`.
+
+### Multisport legs, part 2: MCP exposure
+
+Branch `multisport-legs-mcp`. Scope: the `mcp-server` package only; additive change.
+
+1. **`list_activities`**: every activity gets `legs`, a list ordered by `leg_index` (empty for
+   activities that are not multisport or whose legs are not stored yet). Each leg has
+   `activity_id`, `leg_index`, `sport` (from `activity_type`), `start_time_local`, and the same
+   fields, units and rounding as an activity for the columns it has (`distance_km`,
+   `duration_min`, `moving_duration_min`, `avg_hr_bpm`, `max_hr_bpm`, `calories_kcal`,
+   `avg_speed_kmh`, `elevation_gain_m`, `elevation_loss_m`, `training` with `aerobic_effect`,
+   `anaerobic_effect`, `effect_label`, `load`, `normalized_power_w`, and `intensity_minutes`).
+   No `activity_name` for legs. One query for the legs of the selected activities (no query per
+   activity).
+2. **`activity_totals`**: unchanged; its description says that a multisport activity counts once,
+   with the totals of all its legs.
+3. **Descriptions and schemas**: document `legs` and its units in the tool description and the
+   output schema; say that transitions appear as legs.
+4. **Tests**: legs nested in order with conversions; empty `legs` elsewhere; totals unchanged with
+   legs present; no excluded fields; one legs query per call.
+5. **Docs**: `docs/mcp-server.md` (the `legs` field and its units; transitions as legs).
+
+Acceptance: local checks pass; the maintainer sees the legs of a triathlon through the MCP
+Inspector, and my-health (a separate project that reads this server) shows them in its day view.
 
 ## Coding conventions
 
