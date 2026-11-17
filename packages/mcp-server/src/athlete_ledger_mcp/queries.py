@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Read normalized ledger columns and derive bounded, unit-explicit tool data.
 """  # noqa: D205, D212
@@ -11,7 +11,14 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Literal
 
 from athlete_ledger.coverage import Coverage, sync_coverage
-from athlete_ledger.db.models import Activity, DailyHRV, DailySleep, DailyStress, SyncState
+from athlete_ledger.db.models import (
+    Activity,
+    ActivityLeg,
+    DailyHRV,
+    DailySleep,
+    DailyStress,
+    SyncState,
+)
 from athlete_ledger.sync_types import PROVIDER
 from mcp.server.mcpserver.exceptions import ToolError
 from sqlalchemy import ColumnElement, Engine, func, select
@@ -31,6 +38,8 @@ from athlete_ledger_mcp.results import (
     HRVValues,
     IntensityMinutes,
     LedgerStatus,
+    LegData,
+    LegTrainingMetrics,
     MissingValues,
     NamedActivityData,
     SleepValues,
@@ -214,6 +223,35 @@ def ledger_status(engine: Engine, today: date) -> LedgerStatus:
     )
 
 
+def common_training_values(row: Any) -> dict[str, Any]:
+    """Convert training and movement values shared by activity summaries and legs.
+
+    Args:
+        row: Selected normalized columns in provider-native units.
+
+    Returns:
+        Converted scalar fields and stable training/intensity objects with nullable members.
+    """
+    return {
+        "moving_duration_min": scaled(row.moving_duration_s, 60),
+        "avg_speed_kmh": scaled(row.avg_speed_mps * 3.6) if row.avg_speed_mps is not None else None,
+        "max_hr_bpm": scaled(row.max_hr_bpm),
+        "elevation_gain_m": scaled(row.elevation_gain_m),
+        "elevation_loss_m": scaled(row.elevation_loss_m),
+        "training": LegTrainingMetrics(
+            aerobic_effect=scaled(row.aerobic_training_effect),
+            anaerobic_effect=scaled(row.anaerobic_training_effect),
+            effect_label=row.training_effect_label,
+            load=scaled(row.training_load),
+            normalized_power_w=scaled(row.normalized_power_w, digits=0),
+        ),
+        "intensity_minutes": IntensityMinutes(
+            moderate=row.moderate_intensity_min,
+            vigorous=row.vigorous_intensity_min,
+        ),
+    }
+
+
 def activity_training_values(row: Any) -> dict[str, Any]:
     """Convert only the selected stored training columns into the additive list fields.
 
@@ -223,24 +261,13 @@ def activity_training_values(row: Any) -> dict[str, Any]:
     Returns:
         Unit-converted scalar fields and always-present nested result objects.
     """
+    values = common_training_values(row)
     return {
-        "moving_duration_min": scaled(row.moving_duration_s, 60),
-        "avg_speed_kmh": scaled(row.avg_speed_mps * 3.6) if row.avg_speed_mps is not None else None,
-        "max_hr_bpm": scaled(row.max_hr_bpm),
-        "elevation_gain_m": scaled(row.elevation_gain_m),
-        "elevation_loss_m": scaled(row.elevation_loss_m),
+        **values,
         "training": TrainingMetrics(
-            aerobic_effect=scaled(row.aerobic_training_effect),
-            anaerobic_effect=scaled(row.anaerobic_training_effect),
-            effect_label=row.training_effect_label,
-            load=scaled(row.training_load),
+            **values["training"].model_dump(),
             stress_score=scaled(row.training_stress_score),
             intensity_factor=scaled(row.intensity_factor, digits=2),
-            normalized_power_w=scaled(row.normalized_power_w, digits=0),
-        ),
-        "intensity_minutes": IntensityMinutes(
-            moderate=row.moderate_intensity_min,
-            vigorous=row.vigorous_intensity_min,
         ),
         "hr_zone_min": HeartRateZoneMinutes(
             **{
@@ -249,6 +276,26 @@ def activity_training_values(row: Any) -> dict[str, Any]:
             }
         ),
     }
+
+
+def activity_summary_values(row: Any) -> dict[str, Any]:
+    """Convert the identity, local time and base metrics shared by summaries and legs.
+
+    Args:
+        row: Selected normalized columns, with nullable metrics in stored units.
+
+    Returns:
+        Common result fields using kilometres, minutes, beats/minute and kilocalories.
+    """
+    return dict(
+        activity_id=row.activity_id,
+        start_time_local=row.start_time_local,
+        sport=row.activity_type,
+        distance_km=scaled(row.distance_m, 1000, 2),
+        duration_min=scaled(row.duration_s, 60),
+        avg_hr_bpm=scaled(row.avg_hr_bpm),
+        calories_kcal=row.calories_kcal,
+    )
 
 
 def list_activities(
@@ -310,17 +357,52 @@ def list_activities(
             .where(*predicates)
             .order_by(Activity.start_time_local, Activity.activity_id)
             .limit(limit)
-        )
+        ).all()
+        legs: dict[int, list[LegData]] = defaultdict(list)
+        if rows:
+            leg_rows = connection.execute(
+                select(
+                    ActivityLeg.parent_activity_id,
+                    ActivityLeg.activity_id,
+                    ActivityLeg.leg_index,
+                    ActivityLeg.start_time_local,
+                    ActivityLeg.activity_type,
+                    ActivityLeg.distance_m,
+                    ActivityLeg.duration_s,
+                    ActivityLeg.avg_hr_bpm,
+                    ActivityLeg.calories_kcal,
+                    ActivityLeg.moving_duration_s,
+                    ActivityLeg.avg_speed_mps,
+                    ActivityLeg.max_hr_bpm,
+                    ActivityLeg.elevation_gain_m,
+                    ActivityLeg.elevation_loss_m,
+                    ActivityLeg.aerobic_training_effect,
+                    ActivityLeg.anaerobic_training_effect,
+                    ActivityLeg.training_effect_label,
+                    ActivityLeg.training_load,
+                    ActivityLeg.normalized_power_w,
+                    ActivityLeg.moderate_intensity_min,
+                    ActivityLeg.vigorous_intensity_min,
+                )
+                .where(
+                    ActivityLeg.provider == PROVIDER,
+                    ActivityLeg.parent_activity_id.in_([row.activity_id for row in rows]),
+                )
+                .order_by(ActivityLeg.parent_activity_id, ActivityLeg.leg_index)
+            )
+            for leg in leg_rows:
+                legs[leg.parent_activity_id].append(
+                    LegData(
+                        **activity_summary_values(leg),
+                        **common_training_values(leg),
+                        leg_index=leg.leg_index,
+                    )
+                )
         for row in rows:
             values = dict(
-                activity_id=row.activity_id,
-                start_time_local=row.start_time_local,
-                sport=row.activity_type,
-                distance_km=scaled(row.distance_m, 1000, 2),
-                duration_min=scaled(row.duration_s, 60),
-                avg_hr_bpm=scaled(row.avg_hr_bpm),
-                calories_kcal=row.calories_kcal,
+                **activity_summary_values(row),
                 **activity_training_values(row),
+                legs=legs[row.activity_id],
             )
             activities.append(
                 NamedActivityData(**values, activity_name=row.activity_name)

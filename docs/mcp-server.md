@@ -42,6 +42,33 @@ output schema, with units in field names and descriptions.
 TSS, IF and normalized power are available mostly for activities recorded with a power meter.
 Nested objects are always present, with `null` members when values are missing.
 
+#### Multisport legs
+
+Every activity returned by `list_activities` includes `legs`, ordered by the zero-based
+`leg_index` from the parent's `childIds`. Transitions appear as legs with sport `transition_v2`.
+Non-multisport activities and multisport parents without stored legs have `legs: []`. Download
+the details first with `athlete-ledger sync legs`; the MCP server reads only stored data.
+
+| Leg field | Unit and rounding |
+|---|---|
+| `activity_id`, `leg_index`, `sport` | Provider identifier; zero-based order; provider sport text |
+| `start_time_local` | ISO local wall time, without a timezone; `null` if missing |
+| `distance_km` | km, 2 decimals |
+| `duration_min`, `moving_duration_min` | minutes, 1 decimal |
+| `avg_hr_bpm`, `max_hr_bpm` | beats/minute, 1 decimal |
+| `calories_kcal` | kcal, as stored |
+| `avg_speed_kmh` | km/h (stored m/s × 3.6), 1 decimal |
+| `elevation_gain_m`, `elevation_loss_m` | metres, 1 decimal |
+| `training.aerobic_effect`, `training.anaerobic_effect` | Provider effects, 0–5, 1 decimal |
+| `training.effect_label`, `training.load`, `training.normalized_power_w` | Provider label; provider load units, 1 decimal; watts, 0 decimals |
+| `intensity_minutes.moderate`, `intensity_minutes.vigorous` | Integer minutes |
+
+Leg `training` and `intensity_minutes` objects are always present, with `null` members for
+missing values. Legs never expose names, even when activity names are enabled; TSS, IF and
+heart-rate zones are absent from legs. Parent sport filters, limits, match counts and truncation
+are unaffected by legs. Totals count each multisport activity once, using the parent's totals
+for all its legs, so no leg is counted twice.
+
 ### Totals
 
 Each group and the overall total contain the activity count and plain sums of distance, duration,
