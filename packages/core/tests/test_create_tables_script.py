@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Validate the Oracle setup launcher without a real Oracle connection.
 """  # noqa: D205, D212
@@ -129,9 +129,9 @@ def test_setup_script_reaches_current_head_on_fresh_sqlite(
     assert calls == [("db", "upgrade"), ("db", "check")]
     output = capsys.readouterr()
     assert output.err == ""
-    assert "Alembic revision: 0002_activity_training_metrics" in output.out
+    assert "Alembic revision: 0003_activity_legs" in output.out
     engine = create_engine(f"sqlite:///{path}")
     try:
-        assert check_database(engine).revision == "0002_activity_training_metrics"
+        assert check_database(engine).revision == "0003_activity_legs"
     finally:
         engine.dispose()

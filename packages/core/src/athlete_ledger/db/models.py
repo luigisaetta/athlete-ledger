@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Provider-scoped ledger schema; every metric is nullable and names carry units.
 """  # noqa: D205, D212
@@ -13,6 +13,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Identity,
     Index,
     Integer,
@@ -113,6 +114,41 @@ class Activity(SourceRecord, Base):
     file_status: Mapped[str] = mapped_column(
         String(32), default="not_downloaded", server_default=text("'not_downloaded'")
     )
+
+
+class ActivityLeg(SourceRecord, Base):
+    """One multisport leg, including transitions, separate from activity totals."""
+
+    __tablename__ = "activity_leg"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["provider", "parent_activity_id"], ["activity.provider", "activity.activity_id"]
+        ),
+        Index("ix_activity_leg_parent", "provider", "parent_activity_id"),
+    )
+
+    provider: Mapped[str] = mapped_column(String(64), primary_key=True)
+    activity_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    parent_activity_id: Mapped[int] = mapped_column(BigInteger)
+    leg_index: Mapped[int]
+    start_time_local: Mapped[datetime | None] = mapped_column(DateTime(timezone=False))
+    activity_type: Mapped[str | None] = mapped_column(String(128))
+    distance_m: Mapped[float | None]
+    duration_s: Mapped[float | None]
+    moving_duration_s: Mapped[float | None]
+    avg_hr_bpm: Mapped[float | None]
+    max_hr_bpm: Mapped[float | None]
+    calories_kcal: Mapped[float | None]
+    avg_speed_mps: Mapped[float | None]
+    elevation_gain_m: Mapped[float | None]
+    elevation_loss_m: Mapped[float | None]
+    aerobic_training_effect: Mapped[float | None]
+    anaerobic_training_effect: Mapped[float | None]
+    training_effect_label: Mapped[str | None] = mapped_column(String(64))
+    training_load: Mapped[float | None]
+    normalized_power_w: Mapped[float | None]
+    moderate_intensity_min: Mapped[int | None]
+    vigorous_intensity_min: Mapped[int | None]
 
 
 class DailyRecord(SourceRecord):

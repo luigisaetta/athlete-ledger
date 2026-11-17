@@ -228,3 +228,49 @@ ALTER TABLE activity ADD hr_zone_5_s FLOAT
 UPDATE alembic_version SET version_num='0002_activity_training_metrics' WHERE alembic_version.version_num = '0001_ledger_store'
 
 /
+
+-- Running upgrade 0002_activity_training_metrics -> 0003_activity_legs
+
+CREATE TABLE activity_leg (
+    provider VARCHAR2(64 CHAR) NOT NULL,
+    activity_id NUMBER(19) NOT NULL,
+    parent_activity_id NUMBER(19) NOT NULL,
+    leg_index INTEGER NOT NULL,
+    start_time_local DATE,
+    activity_type VARCHAR2(128 CHAR),
+    distance_m FLOAT,
+    duration_s FLOAT,
+    moving_duration_s FLOAT,
+    avg_hr_bpm FLOAT,
+    max_hr_bpm FLOAT,
+    calories_kcal FLOAT,
+    avg_speed_mps FLOAT,
+    elevation_gain_m FLOAT,
+    elevation_loss_m FLOAT,
+    aerobic_training_effect FLOAT,
+    anaerobic_training_effect FLOAT,
+    training_load FLOAT,
+    normalized_power_w FLOAT,
+    training_effect_label VARCHAR2(64 CHAR),
+    moderate_intensity_min INTEGER,
+    vigorous_intensity_min INTEGER,
+    source_response_id INTEGER NOT NULL,
+    updated_at TIMESTAMP NOT NULL,
+    CONSTRAINT pk_activity_leg PRIMARY KEY (provider, activity_id),
+    CONSTRAINT fk_activity_leg_provider FOREIGN KEY(provider, parent_activity_id) REFERENCES activity (provider, activity_id),
+    CONSTRAINT fk_activity_leg_source_response_id FOREIGN KEY(source_response_id) REFERENCES raw_response (id)
+)
+
+/
+
+CREATE INDEX ix_activity_leg_parent ON activity_leg (provider, parent_activity_id)
+
+/
+
+GRANT SELECT ON activity_leg TO ATHLETE_LEDGER_READER
+
+/
+
+UPDATE alembic_version SET version_num='0003_activity_legs' WHERE alembic_version.version_num = '0002_activity_training_metrics'
+
+/

@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Normalize summary payloads without database or network access.
 """  # noqa: D205, D212
@@ -267,3 +267,150 @@ def normalize(dataset: str, payload: Any, start: date, end: date) -> NormalizedB
                     row["overall_stress_level"] = None
         batch.rows.append(row)
     return batch
+
+
+def detail_identifier(value: Any) -> int:
+    """Validate a detail identifier without exposing its value.
+
+    Args:
+        value: Provider identifier from parameters, childIds or parentId.
+
+    Returns:
+        A nonnegative integer identifier.
+
+    Raises:
+        UnexpectedResponseError: If the identifier is invalid.
+    """
+    try:
+        return activity_id({"activityId": value})
+    except UnexpectedResponseError:
+        raise UnexpectedResponseError("get_activity") from None
+
+
+def detail_summary(payload: Any) -> dict[str, Any]:
+    """Validate the detail envelope and its naive local timestamp.
+
+    Args:
+        payload: Unmodified decoded detail response.
+
+    Returns:
+        The summary object.
+
+    Raises:
+        UnexpectedResponseError: If shape or timestamp is invalid.
+    """
+    if not isinstance(payload, dict) or not isinstance(payload.get("summaryDTO"), dict):
+        raise UnexpectedResponseError("get_activity")
+    summary: dict[str, Any] = payload["summaryDTO"]
+    stamp = summary.get("startTimeLocal")
+    if stamp is not None:
+        try:
+            if not isinstance(stamp, str) or datetime.fromisoformat(stamp).tzinfo is not None:
+                raise ValueError
+        except ValueError:
+            raise UnexpectedResponseError("get_activity") from None
+    return summary
+
+
+def detail_children(payload: Any) -> list[int]:
+    """Read the ordered leg identifiers from a validated parent detail.
+
+    Args:
+        payload: Parent detail response.
+
+    Returns:
+        Ordered child identifiers, empty when metadata or childIds are absent.
+
+    Raises:
+        UnexpectedResponseError: If childIds or the detail envelope is malformed.
+    """
+    detail_summary(payload)
+    metadata = payload.get("metadataDTO")
+    if metadata is None:
+        return []
+    if not isinstance(metadata, dict):
+        raise UnexpectedResponseError("get_activity")
+    children = metadata.get("childIds")
+    if children is None:
+        return []
+    if not isinstance(children, list):
+        raise UnexpectedResponseError("get_activity")
+    identifiers = [detail_identifier(value) for value in children]
+    if len(set(identifiers)) != len(identifiers):
+        raise UnexpectedResponseError("get_activity")
+    return identifiers
+
+
+def normalize_leg(payload: Any, identifier: int, parent_id: int, leg_index: int) -> dict[str, Any]:
+    """Derive only allowlisted leg columns from a complete detail response.
+
+    Args:
+        payload: Raw detail; excluded fields are never read.
+        identifier: Requested leg identifier from the parent childIds.
+        parent_id: Stored parent activity identifier.
+        leg_index: Zero-based position in childIds.
+
+    Returns:
+        Leg columns without provider or provenance metadata.
+
+    Raises:
+        UnexpectedResponseError: If identifiers, shape or timestamp are invalid.
+    """
+    summary = detail_summary(payload)
+    if detail_identifier(payload.get("parentId")) != parent_id:
+        raise UnexpectedResponseError("get_activity")
+    if detail_identifier(payload.get("activityId")) != identifier:
+        raise UnexpectedResponseError("get_activity")
+    stamp = summary.get("startTimeLocal")
+    metrics = _training_metrics(
+        {
+            **{
+                key: summary.get(key)
+                for key in (
+                    "anaerobicTrainingEffect",
+                    "trainingEffectLabel",
+                    "activityTrainingLoad",
+                    "elevationGain",
+                    "elevationLoss",
+                    "maxHR",
+                    "averageSpeed",
+                    "movingDuration",
+                    "moderateIntensityMinutes",
+                    "vigorousIntensityMinutes",
+                )
+            },
+            "aerobicTrainingEffect": summary.get("trainingEffect"),
+            "normPower": summary.get("normalizedPower"),
+        }
+    )
+    allowed_training = (
+        "aerobic_training_effect",
+        "anaerobic_training_effect",
+        "training_effect_label",
+        "training_load",
+        "normalized_power_w",
+        "moderate_intensity_min",
+        "vigorous_intensity_min",
+        "elevation_gain_m",
+        "elevation_loss_m",
+        "max_hr_bpm",
+        "avg_speed_mps",
+        "moving_duration_s",
+    )
+    return {
+        "activity_id": identifier,
+        "parent_activity_id": parent_id,
+        "leg_index": leg_index,
+        "start_time_local": datetime.fromisoformat(stamp) if stamp is not None else None,
+        "activity_type": _text(_nested(payload, "activityTypeDTO", "typeKey")),
+        **{
+            dest: _metric(summary.get(src))
+            for dest, src in {
+                "distance_m": "distance",
+                "duration_s": "duration",
+                "avg_hr_bpm": "averageHR",
+                "calories_kcal": "calories",
+            }.items()
+        },
+        **{name: metrics[name] for name in allowed_training},
+    }

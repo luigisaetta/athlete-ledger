@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Wrap SDK authentication, safe retries and activity pagination.
 """  # noqa: D205, D212
@@ -55,6 +55,17 @@ class Authenticator(Protocol):
 
 class Client(Protocol):
     """The shared lifecycle of SDK and fake clients."""
+
+    def get_activity(self, activity_id: int) -> object:
+        """Fetch one activity detail.
+
+        Args:
+            activity_id: Provider identifier.
+
+        Returns:
+            Decoded JSON payload.
+        """
+        ...
 
     def update_bearer_token(self, bearer_token: str) -> None:
         """Replace the bearer string without rendering it.
@@ -289,6 +300,23 @@ class PersonalProvider:
             if dataset != "activities" or not page:
                 break
             offset += len(page)
+
+    def activity_detail(self, activity_id: int) -> Response:
+        """Fetch one detail through the shared retry and token boundary.
+
+        Args:
+            activity_id: Provider identifier of a parent or leg.
+
+        Returns:
+            Unmodified detail with reproducible request parameters.
+
+        Raises:
+            ProviderError: If the SDK request cannot complete.
+        """
+        client = self._ensure_client()
+        operation = cast(Callable[..., object], client.get_activity)
+        payload = self._attempt("get_activity", "GET", partial(operation, activity_id))
+        return Response("get_activity", {"activity_id": activity_id}, payload)
 
     def close(self) -> None:
         """Close both sessions without exposing SDK errors.

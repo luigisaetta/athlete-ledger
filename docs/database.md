@@ -18,6 +18,7 @@ bootstrap script that creates users and roles).
 |---|---|
 | `raw_response` | Every provider response as received (JSON), with endpoint, request parameters, date range, fetch time, content hash and SDK version. Append-only. |
 | `activity` | One row per activity: time, sport, distance, duration, HR, calories, and training metrics (training effect, load, TSS/IF/normalized power, elevation, max HR, speed, moving time, intensity minutes, time in HR zones). |
+| `activity_leg` | Multisport legs and transitions, with a composite foreign key to the parent activity, ordered by `leg_index`; metrics and source detail provenance only, no leg names. |
 | `daily_sleep`, `daily_hrv`, `daily_stress` | One row per calendar day. |
 | `sync_state` | Sync progress and last status per dataset. |
 
@@ -79,7 +80,12 @@ athlete-ledger db check
 
 On ADB, `python scripts/create_tables.py` runs the same upgrade and check, and refuses to fall
 back to SQLite if the Oracle DSN is missing. `db check` prints only the backend, server version
-and current revision (`0002_activity_training_metrics` at the time of writing).
+and current revision (`0003_activity_legs` at the time of writing).
+
+Revision `0003_activity_legs` creates `activity_leg`, its parent index and the Oracle reader
+SELECT grant, preserving existing activities and totals. After upgrading, run
+`athlete-ledger sync legs` as the owner to download details; existing list responses do not contain the leg IDs.
+Stored details can subsequently be replayed with `athlete-ledger sync rebuild --dataset legs`.
 
 **Upgrade the database before using a new version of the code**: sync reads every column of the
 normalized tables. On Oracle each DDL statement commits on its own, so an interrupted migration
@@ -103,7 +109,8 @@ It documents the schema; do not apply it on top of a database managed with `db u
   because the locked SQLAlchemy 2.0 dialect cannot compile native Oracle JSON. Documents are
   replaced as a whole.
 - Fetch and update timestamps are stored as UTC and returned as timezone-aware UTC datetimes.
-- `activity.start_time_local` is deliberately the provider's local wall time, without a timezone.
+- `activity.start_time_local` and `activity_leg.start_time_local` deliberately keep the provider's
+  local wall time, without a timezone.
 
 ## Diagnostics
 

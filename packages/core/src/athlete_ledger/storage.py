@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Store append-only raw responses and portable ORM updates.
 """  # noqa: D205, D212
@@ -15,16 +15,24 @@ from typing import Any, cast
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from athlete_ledger.db.models import Activity, DailyHRV, DailySleep, DailyStress, RawResponse
+from athlete_ledger.db.models import (
+    Activity,
+    ActivityLeg,
+    DailyHRV,
+    DailySleep,
+    DailyStress,
+    RawResponse,
+)
 from athlete_ledger.db.types import JSONValue
 from athlete_ledger.normalize.garmin_connect import normalize, records
-from athlete_ledger.sync_types import PROVIDER, ProviderError, Response
+from athlete_ledger.sync_types import PROVIDER, ProviderError, Response, UnexpectedResponseError
 
-NormalizedRecord = Activity | DailySleep | DailyHRV | DailyStress
+NormalizedRecord = Activity | ActivityLeg | DailySleep | DailyHRV | DailyStress
 NormalizedKey = tuple[str, int | date]
 UpsertCache = dict[NormalizedKey, NormalizedRecord | None]
 MODELS: dict[str, type[NormalizedRecord]] = {
     "activities": Activity,
+    "legs": ActivityLeg,
     "sleep": DailySleep,
     "hrv": DailyHRV,
     "stress": DailyStress,
@@ -95,6 +103,43 @@ def store_response(
         ProviderError: If payload serialization is invalid.
     """
     page = records(dataset, response.payload)
+    raw, stored = _store_raw(session, response, start, end, sdk_version, clock, not page)
+    if not stored:
+        counts.raw_unchanged += 1
+        return
+    counts.raw_stored += 1
+    batch = normalize(dataset, response.payload, start, end)
+    counts.placeholders += batch.placeholders
+    for row in batch.rows:
+        upsert_row(session, dataset, row, raw.id, clock, counts)
+
+
+def _store_raw(
+    session: Session,
+    response: Response,
+    start: date,
+    end: date,
+    sdk_version: str,
+    clock: Callable[[], datetime],
+    is_empty: bool,
+) -> tuple[RawResponse, bool]:
+    """Persist changed content or return the latest identical response.
+
+    Args:
+        session: Caller-owned transaction.
+        response: Raw payload and exact request parameters.
+        start: Inclusive range start.
+        end: Inclusive range end.
+        sdk_version: Installed SDK version.
+        clock: Aware fetch timestamp supplier.
+        is_empty: Endpoint-specific empty flag.
+
+    Returns:
+        Stored response and whether a new append-only row was inserted.
+
+    Raises:
+        ProviderError: If the payload is not serializable JSON.
+    """
     try:
         digest = content_hash(response.payload)
     except (ValueError, TypeError, OverflowError):
@@ -111,8 +156,7 @@ def store_response(
     )
     latest = next((raw for raw in candidates if raw.params == response.params), None)
     if latest is not None and latest.content_sha256 == digest:
-        counts.raw_unchanged += 1
-        return
+        return latest, False
     raw = RawResponse(
         provider=PROVIDER,
         endpoint=response.endpoint,
@@ -122,16 +166,46 @@ def store_response(
         fetched_at=clock(),
         content_sha256=digest,
         sdk_version=sdk_version,
-        is_empty=not page,
+        is_empty=is_empty,
         payload=cast(JSONValue | None, response.payload),
     )
     session.add(raw)
     session.flush()
-    counts.raw_stored += 1
-    batch = normalize(dataset, response.payload, start, end)
-    counts.placeholders += batch.placeholders
-    for row in batch.rows:
-        upsert_row(session, dataset, row, raw.id, clock, counts)
+    return raw, True
+
+
+def store_detail_response(
+    session: Session,
+    response: Response,
+    parent_date: date,
+    sdk_version: str,
+    clock: Callable[[], datetime],
+) -> RawResponse:
+    """Store a detail beside dataset responses without deriving coverage or sync state.
+
+    Args:
+        session: Per-parent transaction.
+        response: Parent or leg get_activity response.
+        parent_date: Parent's local calendar date for both raw range boundaries.
+        sdk_version: Installed provider SDK version.
+        clock: Aware fetch timestamp supplier.
+
+    Returns:
+        New or latest identical raw response, used as leg provenance.
+
+    Raises:
+        ProviderError: If the payload is not serializable JSON.
+    """
+    raw, _ = _store_raw(
+        session,
+        response,
+        parent_date,
+        parent_date,
+        sdk_version,
+        clock,
+        response.payload is None,
+    )
+    return raw
 
 
 def upsert_row(
@@ -154,15 +228,23 @@ def upsert_row(
         counts: Caller-owned counters incremented for insertion, change or no change.
         cache: Optional identity cache for deferred-flush replay, including pending
             inserts; None preserves ordinary sync session lookups.
+
+    Raises:
+        UnexpectedResponseError: If an existing leg belongs to another parent.
     """
     model = MODELS[dataset]
-    identifier = row["activity_id"] if dataset == "activities" else row["calendar_date"]
+    identifier = row["activity_id"] if dataset in {"activities", "legs"} else row["calendar_date"]
     cache_key = (dataset, identifier)
     existing = (
         cache[cache_key]
         if cache is not None and cache_key in cache
         else cast(NormalizedRecord | None, session.get(model, (PROVIDER, identifier)))
     )
+    if (
+        isinstance(existing, ActivityLeg)
+        and existing.parent_activity_id != row["parent_activity_id"]
+    ):
+        raise UnexpectedResponseError("get_activity")
     if existing is None:
         existing = model(
             **row, provider=PROVIDER, source_response_id=source_response_id, updated_at=clock()

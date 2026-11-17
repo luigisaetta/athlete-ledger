@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Replay stored raw responses into normalized rows without provider access.
 """  # noqa: D205, D212
@@ -13,8 +13,14 @@ from typing import Any, cast
 from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
-from athlete_ledger.db.models import RawResponse, utc_now
-from athlete_ledger.normalize.garmin_connect import normalize
+from athlete_ledger.db.models import Activity, RawResponse, utc_now
+from athlete_ledger.normalize.garmin_connect import (
+    detail_children,
+    detail_identifier,
+    detail_summary,
+    normalize,
+    normalize_leg,
+)
 from athlete_ledger.storage import (
     MODELS,
     Counts,
@@ -24,6 +30,8 @@ from athlete_ledger.storage import (
     upsert_row,
 )
 from athlete_ledger.sync_types import DATASETS, ENDPOINTS, PROVIDER
+
+REBUILD_DATASETS = (*DATASETS, "legs")
 
 
 @dataclass
@@ -75,7 +83,9 @@ class _Replay:
             clock: Aware timestamp supplier for changed/new rows.
             counts: Working counters whose row totals are finalized after replay.
         """
-        identifier = row["activity_id"] if dataset == "activities" else row["calendar_date"]
+        identifier = (
+            row["activity_id"] if dataset in {"activities", "legs"} else row["calendar_date"]
+        )
         key = (dataset, identifier)
         if key not in self.originals:
             original = cast(
@@ -114,13 +124,16 @@ class _Replay:
 
 
 def rebuild(
-    engine: Engine, datasets: Sequence[str] = DATASETS, *, clock: Callable[[], datetime] = utc_now
+    engine: Engine,
+    datasets: Sequence[str] = REBUILD_DATASETS,
+    *,
+    clock: Callable[[], datetime] = utc_now,
 ) -> list[RebuildResult]:
     """Replay every nonempty raw response in ID order with one transaction per dataset.
 
     Args:
         engine: Owner engine used to read raw responses and write normalized rows only.
-        datasets: Supported datasets to rebuild, defaulting to all four.
+        datasets: Supported datasets to rebuild, defaulting to all four and legs.
         clock: Aware timestamp supplier, injectable for deterministic tests.
 
     Returns:
@@ -132,10 +145,17 @@ def rebuild(
     Raises:
         ValueError: If an unsupported dataset is requested.
     """
-    if any(dataset not in DATASETS for dataset in datasets):
+    if any(dataset not in REBUILD_DATASETS for dataset in datasets):
         raise ValueError("Unsupported rebuild dataset.")
     results: list[RebuildResult] = []
-    for dataset in dict.fromkeys(datasets):
+    ordered = list(dict.fromkeys(datasets))
+    if "legs" in ordered:
+        ordered.remove("legs")
+        ordered.append("legs")
+    for dataset in ordered:
+        if dataset == "legs":
+            results.append(_rebuild_legs(engine, clock))
+            continue
         result = RebuildResult(dataset)
         active_id: int | None = None
         try:
@@ -180,3 +200,73 @@ def rebuild(
             result.error = f"{ENDPOINTS[dataset]}{context}"
         results.append(result)
     return results
+
+
+def _rebuild_legs(engine: Engine, clock: Callable[[], datetime]) -> RebuildResult:
+    """Replay detail values with final parent ordering in one legs transaction.
+
+    Parent order and leg values have independent histories: an unchanged leg detail
+    can be reused after a refreshed parent changes childIds order. Two streamed
+    passes retain only parent/child identifiers, never a collection of payloads.
+
+    Args:
+        engine: Owner engine for reading raw details and writing legs.
+        clock: Aware update timestamp supplier.
+
+    Returns:
+        Net counters or an endpoint/raw-ID diagnostic after complete rollback.
+    """
+    result = RebuildResult("legs")
+    active_id: int | None = None
+    try:
+        with Session(engine, autoflush=False) as session, session.begin():
+            parents = set(
+                session.scalars(
+                    select(Activity.activity_id).where(
+                        Activity.provider == PROVIDER, Activity.activity_type == "multi_sport"
+                    )
+                )
+            )
+            order: dict[int, dict[int, int]] = {}
+            statement = (
+                select(RawResponse.id, RawResponse.params)
+                .where(RawResponse.provider == PROVIDER, RawResponse.endpoint == "get_activity")
+                .order_by(RawResponse.id)
+                .execution_options(yield_per=1)
+            )
+            for raw_id, params in session.execute(statement):
+                active_id = raw_id
+                result.raw_read += 1
+                if not isinstance(params, dict):
+                    raise ValueError
+                identifier = detail_identifier(params.get("activity_id"))
+                payload = session.scalar(
+                    select(RawResponse.payload).where(RawResponse.id == raw_id)
+                )
+                detail_summary(payload)
+                if identifier in parents:
+                    order.setdefault(identifier, {}).update(
+                        {child: index for index, child in enumerate(detail_children(payload))}
+                    )
+            replay = _Replay()
+            for raw_id, params in session.execute(statement):
+                active_id = raw_id
+                identifier = detail_identifier(params.get("activity_id"))
+                if identifier in parents:
+                    continue
+                payload = session.scalar(
+                    select(RawResponse.payload).where(RawResponse.id == raw_id)
+                )
+                if not isinstance(payload, dict):
+                    raise ValueError
+                parent_id = detail_identifier(payload.get("parentId"))
+                if parent_id not in order or identifier not in order[parent_id]:
+                    raise ValueError
+                row = normalize_leg(payload, identifier, parent_id, order[parent_id][identifier])
+                replay.apply(session, "legs", row, raw_id, clock, result.counts)
+            replay.finish(result.counts)
+    except Exception:
+        result.counts = Counts()
+        context = f": raw_id={active_id}" if active_id is not None else ""
+        result.error = f"get_activity{context}"
+    return result

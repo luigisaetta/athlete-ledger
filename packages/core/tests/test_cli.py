@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Exercise the installed database CLI with isolated SQLite configuration.
 """  # noqa: D205, D212
@@ -24,7 +24,7 @@ def test_sqlite_cli_upgrade_and_check(tmp_path: Path) -> None:
         assert result.returncode == 0, result.stderr
     assert "Backend: sqlite" in result.stdout
     assert "Server version:" in result.stdout
-    assert "Alembic revision: 0002_activity_training_metrics" in result.stdout
+    assert "Alembic revision: 0003_activity_legs" in result.stdout
 
 
 def test_cli_offline_ignores_incomplete_oracle_settings(

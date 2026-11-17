@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: SQLite storage, migrations and dialect-only DDL tests with synthetic records.
 """  # noqa: D205, D212
@@ -74,13 +74,13 @@ def test_migration_roundtrip_and_metadata_parity(tmp_path: Path) -> None:
         upgrade(engine)
         upgrade(engine)
         assert set(inspect(engine).get_table_names()) == {*Base.metadata.tables, "alembic_version"}
-        assert check_database(engine).revision == "0002_activity_training_metrics"
+        assert check_database(engine).revision == "0003_activity_legs"
         with engine.connect() as connection:
             assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
         downgrade(engine)
         assert inspect(engine).get_table_names() == ["alembic_version"]
         upgrade(engine)
-        assert check_database(engine).revision == "0002_activity_training_metrics"
+        assert check_database(engine).revision == "0003_activity_legs"
     finally:
         engine.dispose()
 
@@ -273,7 +273,7 @@ def test_offline_oracle_downgrade_revokes_before_dropping() -> None:
     ddl = buffer.getvalue()
     for table in Base.metadata.tables:
         assert ddl.index(f"REVOKE SELECT ON {table} FROM ATHLETE_LEDGER_READER") < ddl.index(
-            f"DROP TABLE {table}"
+            f"DROP TABLE {table}\n"
         )
 
 
