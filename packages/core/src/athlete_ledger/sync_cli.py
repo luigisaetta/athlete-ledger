@@ -180,24 +180,25 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSetting
 
 
 def _print_legs(result: LegsResult) -> int:
-    """Print counts and endpoint-only failure diagnostics for detail sync.
+    """Print counts and distinct safe failure diagnostics for detail sync.
 
     Args:
         result: Per-parent committed work counters.
 
     Returns:
-        Nonzero if any parent failed.
+        Nonzero if any parent or the whole legs step failed.
     """
     counts = result.counts
-    emit = info if result.parents_failed else ok
+    failed = bool(result.parents_failed or result.errors)
+    emit = info if failed else ok
     emit(
         f"legs: parents_checked={result.parents_checked} detail_requests={result.requests} "
         f"legs_inserted={counts.inserted} legs_updated={counts.updated} "
         f"legs_unchanged={counts.unchanged} parents_failed={result.parents_failed}"
     )
-    if result.parents_failed:
-        print("get_activity", file=sys.stderr)
-    return int(bool(result.parents_failed))
+    for message in result.errors:
+        print(message, file=sys.stderr)
+    return int(failed)
 
 
 def _print_coverage(engine: Engine, datasets: tuple[str, ...] | list[str], today: date) -> None:

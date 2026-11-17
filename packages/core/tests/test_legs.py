@@ -560,7 +560,7 @@ def test_cli_legs_status_privacy_and_dataset_boundaries(engine, monkeypatch, cap
     provider.payloads[101] = ValueError(MARKER)
     assert run(["sync", "legs", "--refresh"]) == 1
     captured = capsys.readouterr()
-    assert captured.err == "get_activity\n" and MARKER not in captured.out
+    assert captured.err == "ValueError\n" and MARKER not in captured.out
     for args in (
         ["sync", "run", "--dataset", "legs"],
         ["sync", "backfill", "--since", str(DAY), "--dataset", "legs"],
@@ -668,7 +668,7 @@ def test_cli_incremental_legs_and_other_datasets_continue_on_detail_failure(
     assert run(["sync", "run", "--dataset", "activities", "sleep"]) == 1
     output = capsys.readouterr()
     assert provider.calls == [100]
-    assert "sleep: chunks=1" in output.out and output.err == "get_activity\n"
+    assert "sleep: chunks=1" in output.out and output.err == "ValueError\n"
     assert MARKER not in output.out + output.err and provider.closed
 
 

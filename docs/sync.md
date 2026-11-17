@@ -88,7 +88,10 @@ all stored eligible parents, independently of the download's date range.
 Each parent and all its legs commit in one transaction. A malformed detail or failed request
 rolls back that family only; other parents continue and the command exits non-zero. An initial
 failure leaves the parent eligible for the next run. A failed refresh keeps the previous family;
-retry it with `--refresh`. Missing legs in later responses are not deleted.
+retry it with `--refresh`. Missing legs in later responses are not deleted. A failure while
+selecting parents fails the legs step and returns a non-zero exit status; sleep, HRV and stress
+still run when selected. Provider failures retain their safe endpoint/status diagnostics;
+unexpected exceptions report only their type. Interrupts propagate normally.
 
 Details are stored in `raw_response` under `get_activity`, with the parent's local date as both
 range boundaries. They do not form a dataset, do not create `sync_state` rows, and never count
@@ -140,8 +143,11 @@ Output contains only counts per dataset (windows, requests, raw responses stored
 rows inserted, updated or unchanged, placeholders skipped), dates and safe error messages
 (endpoint, HTTP status, raw row id). Metric values, activity names, payloads, keys, tokens and
 provider error bodies are never printed or logged. Leg sync prints only parents checked,
-detail requests, legs inserted/updated/unchanged and parents failed; unexpected detail failures
-name only `get_activity`.
+detail requests, legs inserted/updated/unchanged and parents failed. Each distinct safe leg-sync
+failure message is printed once on stderr, in first-occurrence order: provider and unexpected-response
+errors retain their already sanitized messages (endpoint and HTTP status where available), while
+other exceptions report only their type name. No IDs, exception values, payloads or tracebacks
+are included in leg-sync diagnostics.
 
 Tests use fake clients and synthetic data only, with guards against real network calls. SDK
 behaviour verified from its source is recorded in the

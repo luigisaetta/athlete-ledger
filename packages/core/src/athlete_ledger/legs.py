@@ -15,17 +15,34 @@ from sqlalchemy.orm import Session
 from athlete_ledger.db.models import Activity, ActivityLeg, RawResponse, utc_now
 from athlete_ledger.normalize.garmin_connect import detail_children, normalize_leg
 from athlete_ledger.storage import Counts, store_detail_response, upsert_row
-from athlete_ledger.sync_types import PROVIDER, DetailProvider, UnexpectedResponseError
+from athlete_ledger.sync_types import (
+    PROVIDER,
+    DetailProvider,
+    ProviderError,
+    UnexpectedResponseError,
+)
 
 
 @dataclass
 class LegsResult:
-    """Counts only; failed parents never contribute committed row counters."""
+    """Committed work counters and distinct safe diagnostics in first-occurrence order."""
 
     parents_checked: int = 0
     requests: int = 0
     counts: Counts = field(default_factory=Counts)
     parents_failed: int = 0
+    errors: list[str] = field(default_factory=list)
+
+    def add_error(self, error: Exception) -> None:
+        """Retain a distinct safe diagnostic without rendering unexpected exceptions.
+
+        Args:
+            error: Provider-safe failure or an unexpected exception whose type alone
+                may be reported.
+        """
+        message = str(error) if isinstance(error, ProviderError) else type(error).__name__
+        if message not in self.errors:
+            self.errors.append(message)
 
 
 def sync_legs(
@@ -46,28 +63,34 @@ def sync_legs(
     Returns:
         Counts for selected parents, requests including retries, committed legs and
         failed parents. Initial failures remain eligible automatically; failed refreshes
-        retain the previous family and can be retried with refresh=True.
+        retain the previous family and can be retried with refresh=True. Selection
+        failures return a failed result with safe diagnostics, leaving other datasets
+        free to continue. KeyboardInterrupt and other BaseException subclasses propagate.
     """
     result = LegsResult()
     first_request = provider.request_count
-    with Session(engine) as session:
-        # JSON params are compared in Python: Oracle stores them as CLOBs.
-        checked = set()
-        if not refresh:
-            for params in session.scalars(
-                select(RawResponse.params).where(
-                    RawResponse.provider == PROVIDER, RawResponse.endpoint == "get_activity"
-                )
-            ):
-                if isinstance(params, dict):
-                    identifier = params.get("activity_id")
-                    if isinstance(identifier, int) and not isinstance(identifier, bool):
-                        checked.add(identifier)
-        parents = session.execute(
-            select(Activity.activity_id, Activity.start_time_local)
-            .where(Activity.provider == PROVIDER, Activity.activity_type == "multi_sport")
-            .order_by(Activity.start_time_local, Activity.activity_id)
-        ).all()
+    try:
+        with Session(engine) as session:
+            # JSON params are compared in Python: Oracle stores them as CLOBs.
+            checked = set()
+            if not refresh:
+                for params in session.scalars(
+                    select(RawResponse.params).where(
+                        RawResponse.provider == PROVIDER, RawResponse.endpoint == "get_activity"
+                    )
+                ):
+                    if isinstance(params, dict):
+                        identifier = params.get("activity_id")
+                        if isinstance(identifier, int) and not isinstance(identifier, bool):
+                            checked.add(identifier)
+            parents = session.execute(
+                select(Activity.activity_id, Activity.start_time_local)
+                .where(Activity.provider == PROVIDER, Activity.activity_type == "multi_sport")
+                .order_by(Activity.start_time_local, Activity.activity_id)
+            ).all()
+    except Exception as error:
+        result.add_error(error)
+        return result
     for parent_id, stamp in parents:
         if parent_id in checked:
             continue
@@ -89,9 +112,9 @@ def sync_legs(
                     )
                     upsert_row(session, "legs", row, raw.id, clock, counts)
             result.counts.add(counts)
-        except Exception:
-            # All errors are reduced to endpoint-only diagnostics by the CLI.
+        except Exception as error:
             result.parents_failed += 1
+            result.add_error(error)
     result.requests = provider.request_count - first_request
     return result
 
