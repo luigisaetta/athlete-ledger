@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Define safe sync metadata, counters and provider interfaces.
 """  # noqa: D205, D212
@@ -60,6 +60,24 @@ class Provider(Protocol):
 
     def close(self) -> None:
         """Release transport resources."""
+        ...
+
+
+class DetailProvider(Protocol):
+    """Injectable detail access with the same SDK request accounting as dataset sync."""
+
+    request_count: int
+    sdk_version: str
+
+    def activity_detail(self, activity_id: int) -> Response:
+        """Fetch a parent or leg detail.
+
+        Args:
+            activity_id: Provider identifier to request.
+
+        Returns:
+            One raw detail response.
+        """
         ...
 
 

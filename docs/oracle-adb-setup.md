@@ -259,7 +259,7 @@ and should finish with:
   [OK] Database connection verified.
        Backend: oracle
        Server version: <your database version>
-  [OK] Alembic revision: 0002_activity_training_metrics
+  [OK] Alembic revision: 0003_activity_legs
   [OK] Oracle schema setup completed.
 ```
 
@@ -293,15 +293,26 @@ athlete-ledger db check
 ```
 
 Alternatively, `python scripts/create_tables.py` performs both steps. The expected revision is
-`0002_activity_training_metrics`. Alembic applies only pending revisions; the bootstrap SQL does
-not need to be rerun for this upgrade. Existing table-level SELECT grants to
-`ATHLETE_LEDGER_READER` already cover the added columns, so this revision changes no grants.
+`0003_activity_legs`. Alembic applies only pending revisions; the bootstrap SQL does
+not need to be rerun for this upgrade. Revision `0003_activity_legs` creates the separate
+`activity_leg` table, its parent foreign key and index, and grants SELECT on the new table to
+`ATHLETE_LEDGER_READER`. Existing activities, their totals and training metrics are preserved.
 
-The 19 new activity training metric columns are nullable and remain NULL after this schema-only
-patch. Existing rows and values are preserved; normalization and rebuilding from saved raw
-responses will follow in the next patch, then MCP exposure in a later patch. After upgrading,
-verify `athlete-ledger sync run` still succeeds and the existing MCP server works with the reader
-account. Do not apply the generated full-schema snapshot on top of an upgraded database.
+After upgrading, run as the owner:
+
+```sh
+athlete-ledger sync legs
+athlete-ledger sync status
+```
+
+The first command downloads each unexamined multisport parent's detail plus its leg details.
+Verify by counts that each parent has as many stored legs as its `childIds`; transitions count
+as legs. A repeated `sync legs` should check no already stored parent details, including parents
+with zero children. Use `sync legs --refresh` to fetch them again. To re-derive legs later from
+stored details without downloads, use `sync rebuild --dataset legs`.
+
+Verify the existing MCP server still works with the reader account. Leg exposure through MCP is
+a later change. Do not apply the generated full-schema snapshot on top of an upgraded database.
 
 ## 9. Verify repeatability and the generated schema
 
@@ -312,7 +323,7 @@ python scripts/create_tables.py
 athlete-ledger db check
 ```
 
-Both should succeed with revision `0002_activity_training_metrics`. A successful repeat applies no new migration
+Both should succeed with revision `0003_activity_legs`. A successful repeat applies no new migration
 and creates no duplicate tables. This does not promise automatic recovery from a failed first run:
 Oracle DDL auto-commits and can leave partial objects behind.
 

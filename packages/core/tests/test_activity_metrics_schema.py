@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Verify activity metric schema parity, reversible upgrades and Oracle DDL.
 """  # noqa: D205, D212
@@ -157,14 +157,14 @@ def test_fresh_head_has_exact_nullable_metric_types_without_new_schema_rules(
     assert after.get_indexes("activity") == indexes
     assert after.get_foreign_keys("activity") == foreign_keys
     assert after.get_pk_constraint("activity") == primary_key
-    assert check_database(engine).revision == HEAD
+    assert check_database(engine).revision == "0003_activity_legs"
 
 
 def test_empty_database_upgrades_directly_to_head(engine: Engine) -> None:
     """Apply both frozen revisions to a completely empty database with no special setup path."""
     assert inspect(engine).get_table_names() == []
     upgrade(engine)
-    assert check_database(engine).revision == HEAD
+    assert check_database(engine).revision == "0003_activity_legs"
     assert set(METRIC_TYPES) <= {
         column["name"] for column in inspect(engine).get_columns("activity")
     }
@@ -217,7 +217,7 @@ def test_downgrade_preserves_rows_removes_only_metrics_and_can_upgrade_again(
     assert table_rows(engine, original) == before
     assert table_rows(engine, RawResponse.__table__) == raw_before
     upgrade(engine)
-    assert check_database(engine).revision == HEAD
+    assert check_database(engine).revision == "0003_activity_legs"
     assert table_rows(engine, original) == before
     assert table_rows(engine, RawResponse.__table__) == raw_before
     with engine.connect() as connection:
@@ -254,8 +254,9 @@ def test_oracle_metric_ddl_is_generated_nullable_and_does_not_change_grants() ->
         + ("VARCHAR2(64 CHAR)" if kind is String else "INTEGER" if kind is Integer else "FLOAT")
         for name, kind in METRIC_TYPES.items()
     ]
+    metric_additions = additions.split("-- Running upgrade", maxsplit=1)[0]
     for forbidden in ("GRANT ", "REVOKE ", "CREATE INDEX", "CONSTRAINT", "DEFAULT", "NOT NULL"):
-        assert forbidden not in additions
+        assert forbidden not in metric_additions
     assert ddl == (ROOT / "sql/oracle/schema.sql").read_text()
     assert f"version_num='{HEAD}'" in additions
 
@@ -273,7 +274,7 @@ def test_activity_schema_excludes_location_owner_and_device_fields(engine: Engin
 def test_revision_is_single_head_and_does_not_import_live_models() -> None:
     """Keep the migration chain explicit and the new revision independent of live model changes."""
     scripts = ScriptDirectory.from_config(migration_config())
-    assert scripts.get_heads() == [HEAD]
+    assert scripts.get_heads() == ["0003_activity_legs"]
     revision = scripts.get_revision(HEAD)
     assert revision.down_revision == PREVIOUS
     source = Path(revision.path).read_text()

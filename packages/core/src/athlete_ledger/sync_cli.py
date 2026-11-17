@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Parse sync commands and display only safe counters and state.
 """  # noqa: D205, D212
@@ -16,8 +16,9 @@ from sqlalchemy import Engine
 from athlete_ledger.console import info, ok
 from athlete_ledger.coverage import sync_coverage
 from athlete_ledger.errors import ConfigurationError
+from athlete_ledger.legs import LegsResult, stored_leg_count, sync_legs
 from athlete_ledger.providers.garmin_connect import PersonalProvider
-from athlete_ledger.rebuild import rebuild
+from athlete_ledger.rebuild import REBUILD_DATASETS, rebuild
 from athlete_ledger.settings import DatabaseSettings, Settings
 from athlete_ledger.sync import sync_status, synchronize
 from athlete_ledger.sync_types import DATASETS
@@ -61,6 +62,23 @@ def _dataset(value: str) -> str:
     return value
 
 
+def _rebuild_dataset(value: str) -> str:
+    """Accept legs for rebuild without extending download datasets.
+
+    Args:
+        value: Requested dataset.
+
+    Returns:
+        Validated rebuild dataset name.
+
+    Raises:
+        argparse.ArgumentTypeError: If the dataset is unsupported.
+    """
+    if value not in REBUILD_DATASETS:
+        raise argparse.ArgumentTypeError("Choose activities, sleep, hrv, stress or legs.")
+    return value
+
+
 def add_sync_commands(commands: Any) -> None:
     """Register the sync command family without loading settings or credentials.
 
@@ -77,8 +95,13 @@ def add_sync_commands(commands: Any) -> None:
     rebuild_parser = subcommands.add_parser(
         "rebuild", help="Rebuild normalized rows from stored raw responses"
     )
-    for command in (backfill, incremental, coverage, rebuild_parser):
+    for command in (backfill, incremental, coverage):
         command.add_argument("--dataset", nargs="+", action="extend", type=_dataset, metavar="NAME")
+    rebuild_parser.add_argument(
+        "--dataset", nargs="+", action="extend", type=_rebuild_dataset, metavar="NAME"
+    )
+    legs_parser = subcommands.add_parser("legs", help="Fetch missing multisport leg details")
+    legs_parser.add_argument("--refresh", action="store_true")
     subcommands.add_parser("status", help="Show progress without accessing the provider")
 
 
@@ -94,7 +117,7 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSetting
         Zero only if every requested dataset completed.
     """
     if args.sync_command == "rebuild":
-        return _run_rebuild(engine, args.dataset or DATASETS)
+        return _run_rebuild(engine, args.dataset or REBUILD_DATASETS)
     if args.sync_command == "coverage":
         _print_coverage(engine, args.dataset or DATASETS, date.today())
         return 0
@@ -105,6 +128,7 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSetting
                 f"{state.dataset}: last_synced_date={state.last_synced_date or '-'} "
                 f"last_run_at={stamp} last_status={state.last_status or '-'}"
             )
+        info(f"legs: stored={stored_leg_count(engine)}")
         return 0
     today = date.today()
     since = args.since if args.sync_command == "backfill" else None
@@ -121,7 +145,10 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSetting
         raise ConfigurationError("Provider sync requires provider-enabled settings.")
     provider = PersonalProvider(settings.personal_api_key)
     failed = False
+    legs_results: list[LegsResult] = []
     try:
+        if args.sync_command == "legs":
+            return _print_legs(sync_legs(engine, provider, refresh=args.refresh))
         results = synchronize(
             engine,
             provider,
@@ -129,6 +156,7 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSetting
             since=since,
             until=until,
             today=today,
+            after_activities=lambda: legs_results.append(sync_legs(engine, provider)),
         )
         for result in results:
             c = result.counts
@@ -144,9 +172,32 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSetting
                 print(result.error, file=sys.stderr)
             else:
                 ok(message)
+        for legs_result in legs_results:
+            failed = bool(_print_legs(legs_result)) or failed
     finally:
         provider.close()
     return 1 if failed else 0
+
+
+def _print_legs(result: LegsResult) -> int:
+    """Print counts and endpoint-only failure diagnostics for detail sync.
+
+    Args:
+        result: Per-parent committed work counters.
+
+    Returns:
+        Nonzero if any parent failed.
+    """
+    counts = result.counts
+    emit = info if result.parents_failed else ok
+    emit(
+        f"legs: parents_checked={result.parents_checked} detail_requests={result.requests} "
+        f"legs_inserted={counts.inserted} legs_updated={counts.updated} "
+        f"legs_unchanged={counts.unchanged} parents_failed={result.parents_failed}"
+    )
+    if result.parents_failed:
+        print("get_activity", file=sys.stderr)
+    return int(bool(result.parents_failed))
 
 
 def _print_coverage(engine: Engine, datasets: tuple[str, ...] | list[str], today: date) -> None:

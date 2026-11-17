@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Verify ordered database-only replay, net idempotence and rollback with synthetic data.
 """  # noqa: D205, D212
@@ -289,7 +289,7 @@ def test_filters_empty_rows_placeholders_and_streamed_payloads(engine):
 def test_empty_database_rebuild_succeeds_without_creating_rows(engine):
     """Return zero counts for all areas when no raw responses have been stored."""
     results = rebuild(engine)
-    assert [result.dataset for result in results] == list(DATASETS)
+    assert [result.dataset for result in results] == [*DATASETS, "legs"]
     assert all(
         not result.error and result.raw_read == result.counts.inserted == result.counts.updated == 0
         for result in results
@@ -328,7 +328,7 @@ def test_cli_rebuild_uses_no_provider_or_key_settings_and_prints_counts_only(
     assert "personal_api_key" not in DatabaseSettings.model_fields
     assert run(["sync", "rebuild"]) == 0
     first = capsys.readouterr()
-    assert first.err == "" and len(first.out.splitlines()) == 4
+    assert first.err == "" and len(first.out.splitlines()) == 5
     assert "activities: raw_read=1 empty_skipped=0 rows_inserted=1 rows_updated=0" in first.out
     for marker in ("SYNTHETIC-PRIVATE", "9876.54321", "3.2"):
         assert marker not in first.out + first.err + caplog.text

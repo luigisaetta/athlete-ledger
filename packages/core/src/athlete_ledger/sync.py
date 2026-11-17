@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-17
 License: MIT
 Description: Run transactional per-chunk synchronization and resumable state.
 """  # noqa: D205, D212
@@ -79,6 +79,7 @@ def synchronize(
     until: date | None = None,
     today: date | None = None,
     clock: Callable[[], datetime] = utc_now,
+    after_activities: Callable[[], None] | None = None,
 ) -> list[DatasetResult]:
     """Commit each chunk atomically without moving stored progress backwards.
 
@@ -93,6 +94,8 @@ def synchronize(
         until: Inclusive end date, defaulting to the machine's local date.
         today: Injectable local calendar date for deterministic tests.
         clock: Injectable aware timestamp source.
+        after_activities: Optional follow-up called after the activities dataset, even
+            if that dataset failed; stored parents remain eligible for detail sync.
 
     Returns:
         One safe summary per dataset, continuing after dataset failures.
@@ -150,6 +153,8 @@ def synchronize(
                 result.error = _failure_message(dataset, state_error)
         result.counts.requests = provider.request_count - first_request
         results.append(result)
+        if dataset == "activities" and after_activities is not None:
+            after_activities()
     return results
 
 
