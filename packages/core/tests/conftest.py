@@ -1,6 +1,6 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-26
 License: MIT
 Description: Isolate every core test from local credentials and real databases.
 """  # noqa: D205, D212
@@ -25,6 +25,8 @@ def isolated_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
         if name.startswith("ATHLETE_LEDGER_"):
             monkeypatch.delenv(name)
     monkeypatch.delenv("GARMIN_PERSONAL_API_KEY", raising=False)
+    # Sync locks go under the test's own cache, never the user's ~/.cache.
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     monkeypatch.chdir(tmp_path)
 
     def reject_oracle_connection(*args: object, **kwargs: object) -> None:

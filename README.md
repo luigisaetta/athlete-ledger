@@ -47,7 +47,7 @@ and answers from your data, not from guesses.
 | Area | State | What works today |
 |---|---|---|
 | Ledger store | ✅ Working | SQLite and Oracle ADB (thin-mode mTLS), versioned migrations, least-privilege accounts |
-| Sync from Garmin Connect | ✅ Working | Activities, sleep, HRV and stress summaries: backfill, incremental sync, coverage and gap detection, rebuild from stored responses |
+| Sync from Garmin Connect | ✅ Working | Activities, sleep, HRV and stress summaries: backfill, incremental sync, coverage and gap detection, rebuild from stored responses; automation-friendly with `--env-file`, `--json` output and a per-database lock |
 | Activity training metrics | ✅ Working | Training effect and label, training load, TSS/IF/normalized power, elevation, max HR, speed, moving time, intensity minutes, time in HR zones |
 | MCP server over stdio | ✅ Working | Four read-only tools with typed output schemas; verified on Oracle ADB with real data |
 | MCP over Streamable HTTP | 🔜 Next | Stateless transport (MCP 2026-07-28), bound to localhost |
