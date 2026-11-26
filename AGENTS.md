@@ -719,7 +719,7 @@ factor fields, and some names differ from the list record (`trainingEffect`, `no
 Acceptance: local checks pass; the maintainer upgrades ADB, runs `athlete-ledger sync legs` and
 checks by counts that each `multi_sport` activity has as many legs as its `childIds`.
 
-### Multisport legs, part 2 (current): MCP exposure
+### Multisport legs, part 2 (done): MCP exposure
 
 Branch `multisport-legs-mcp`. Scope: the `mcp-server` package only; additive change.
 
@@ -742,6 +742,54 @@ Branch `multisport-legs-mcp`. Scope: the `mcp-server` package only; additive cha
 
 Acceptance: local checks pass; the maintainer sees the legs of a triathlon through the MCP
 Inspector, and my-health (a separate project that reads this server) shows them in its day view.
+
+### Sync for automation (current): env file, JSON output, lock
+
+Branch `sync-automation`. Scope: the `core` CLI only; no schema, provider or normalization
+changes. Goal: another local program (my-health, a separate project, or a scheduled job) can
+start a sync without depending on its working directory, read the result as data, and never run
+two syncs at once. The default text output and behaviour stay unchanged.
+
+1. **`--env-file PATH`**, a global option before the command (`athlete-ledger --env-file
+   PATH sync run`), as the MCP server already has. Settings are read from that file instead of
+   `./.env`; environment variables still win, as before. A missing file is an error naming the
+   option only (`Env file not found: --env-file.`), exit 1. Relative paths inside the file (for
+   example the wallet directory) keep resolving against the working directory: document that
+   automation should use absolute paths.
+2. **`--json`** on `sync run`, `sync backfill`, `sync legs` and `sync status`: no banner and no
+   text lines on stdout; exactly one JSON object, printed at the end. Diagnostics on stderr are
+   unchanged. Shapes (keys always present):
+   - sync commands: `{"command", "ok", "datasets": [{"dataset", "ok", "chunks", "requests",
+     "raw_stored", "raw_unchanged", "rows_inserted", "rows_updated", "rows_unchanged",
+     "placeholders_skipped", "error"}], "legs": null | {"ok", "parents_checked",
+     "detail_requests", "legs_inserted", "legs_updated", "legs_unchanged", "parents_failed",
+     "errors": [...]}}`; `sync legs` has `datasets: []`;
+   - `sync status`: `{"command": "status", "ok": true, "datasets": [{"dataset",
+     "last_synced_date", "last_run_at", "last_status"}], "legs_stored"}`;
+   - any handled failure before or around the work (settings, database, provider setup, busy):
+     `{"command", "ok": false, "error", "busy"}`, with the same sanitized message that goes to
+     stderr.
+   Messages are the existing safe ones (endpoint, HTTP status, type names): never values,
+   names, keys, tokens or payloads. Exit codes are unchanged (0 or 1), except busy below.
+3. **Lock**: `sync backfill`, `sync run`, `sync legs` and `sync rebuild` take an exclusive,
+   non-blocking lock for the configured database before any provider or database work. A
+   second process gets `Another sync or rebuild is already running for this database.` and
+   **exit code 75** (`EX_TEMPFAIL`), with `busy: true` in JSON. The lock is an OS file lock
+   (`fcntl.flock`, `msvcrt.locking` on Windows) on
+   `$XDG_CACHE_HOME/athlete-ledger/sync-<key>.lock` (default `~/.cache/...`), where `<key>` is
+   a short hash of the database identity (Oracle DSN, or the resolved SQLite path). It is
+   released when the process ends, also on a crash. Limitation: it protects one machine only.
+   `status` and `coverage` take no lock.
+4. **Tests** (synthetic, no network): `--env-file` loads a file outside the working directory
+   and a missing file fails without its path; JSON for `run`, `backfill` with a failed window,
+   `legs`, `status`, and a settings error, all parseable and with no synthetic values; a held
+   lock makes a second sync exit 75 and leaves the database untouched; the lock is released
+   after a run; existing text output unchanged.
+5. **Docs**: `docs/sync.md` (the three features, the JSON shapes, exit code 75, absolute paths
+   for automation).
+
+Acceptance: local checks pass; the maintainer runs `athlete-ledger --env-file <abs path> sync
+run --json` from another directory on ADB, and a second run started meanwhile exits 75.
 
 ## Coding conventions
 

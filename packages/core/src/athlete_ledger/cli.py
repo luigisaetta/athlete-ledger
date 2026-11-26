@@ -1,13 +1,15 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-16
+Date Last Modified: 2026-11-26
 License: MIT
-Description: Local database administration commands with sanitized error output.
+Description: Local database administration and sync commands with sanitized error
+    output; --env-file selects the settings file.
 """  # noqa: D205, D212
 
 import argparse
-import sys
 from collections.abc import Sequence
+from pathlib import Path
+from typing import Any
 
 import oracledb
 from pydantic import ValidationError
@@ -18,8 +20,9 @@ from athlete_ledger.console import banner, info, ok
 from athlete_ledger.db import create_db_engine
 from athlete_ledger.db.migrate import check_database, offline_sql, upgrade
 from athlete_ledger.errors import LedgerError, database_error_code
+from athlete_ledger.locking import BUSY_EXIT_CODE, SyncBusyError
 from athlete_ledger.settings import DatabaseSettings, Settings, validation_environment_names
-from athlete_ledger.sync_cli import add_sync_commands, run_sync
+from athlete_ledger.sync_cli import add_sync_commands, emit_failure, run_sync, wants_json
 from athlete_ledger.sync_types import ProviderError
 
 
@@ -37,8 +40,9 @@ def run(
             terminal.
 
     Returns:
-        Zero when the command succeeds, or one when a handled
-        configuration/provider/database error occurs.
+        Zero when the command succeeds, one when a handled
+        configuration/provider/database error occurs, or 75 when another sync holds the
+        database's lock.
 
     Raises:
         SystemExit: When argparse handles help, version output or invalid command
@@ -46,6 +50,12 @@ def run(
     """
     parser = argparse.ArgumentParser(prog="athlete-ledger")
     parser.add_argument("--version", action="version", version=f"athlete-ledger {__version__}")
+    parser.add_argument(
+        "--env-file",
+        type=Path,
+        default=None,
+        help="Settings file to read instead of ./.env (use absolute paths inside it)",
+    )
     commands = parser.add_subparsers(dest="command")
     add_sync_commands(commands)
     db_parser = commands.add_parser("db", help="Manage the ledger database")
@@ -58,11 +68,16 @@ def run(
     if args.command is None:
         print(f"athlete-ledger {__version__}")
         return 0
+    if args.env_file is not None and not args.env_file.is_file():
+        emit_failure(args, "Env file not found: --env-file.")
+        return 1
+    # Without --env-file the settings keep their default ./.env lookup.
+    options: dict[str, Any] = {} if args.env_file is None else {"_env_file": args.env_file}
     try:
         if args.command == "db" and args.db_command == "sql":
             print(offline_sql(args.dialect), end="")
             return 0
-        if show_banner:
+        if show_banner and not wants_json(args):
             banner(
                 "Summary sync"
                 if args.command == "sync"
@@ -70,11 +85,11 @@ def run(
             )
         settings: DatabaseSettings
         if args.command == "sync" and args.sync_command == "rebuild":
-            settings = DatabaseSettings()
+            settings = DatabaseSettings(**options)
         else:
-            settings = Settings()
+            settings = Settings(**options)
         if require_oracle and settings.backend != "oracle":
-            print("Invalid database settings: ATHLETE_LEDGER_DB_DSN.", file=sys.stderr)
+            emit_failure(args, "Invalid database settings: ATHLETE_LEDGER_DB_DSN.")
             return 1
         engine = create_db_engine(settings)
         try:
@@ -94,24 +109,27 @@ def run(
                     info("Alembic revision: unversioned (migrations not yet applied).")
         finally:
             engine.dispose()
+    except SyncBusyError as error:
+        emit_failure(args, str(error), busy=True)
+        return BUSY_EXIT_CODE
     except ValidationError as error:
         names = validation_environment_names(error)
         detail = ": " + ", ".join(names) if names else ""
-        print(f"Invalid database settings{detail}.", file=sys.stderr)
+        emit_failure(args, f"Invalid database settings{detail}.")
         return 1
     except ProviderError as error:
-        print(str(error), file=sys.stderr)
+        emit_failure(args, str(error))
         return 1
     except OSError as error:
-        print(f"Database operation failed: {type(error).__name__}.", file=sys.stderr)
+        emit_failure(args, f"Database operation failed: {type(error).__name__}.")
         return 1
     except (LedgerError, SQLAlchemyError, oracledb.Error) as error:
         code = database_error_code(error)
         detail = f": {code}" if code else ""
-        print(f"Database operation failed{detail}.", file=sys.stderr)
+        emit_failure(args, f"Database operation failed{detail}.")
         return 1
     except ValueError:
-        print("Database operation failed.", file=sys.stderr)
+        emit_failure(args, "Database operation failed.")
         return 1
     return 0
 

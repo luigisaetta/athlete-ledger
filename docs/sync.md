@@ -44,7 +44,52 @@ look for the API key.
 | `legs` | Fetches details for multisport parents not yet examined; `--refresh` fetches all stored multisport parents again. |
 | `rebuild` | Re-derives the normalized tables from stored raw responses, with no download. |
 
-Run only one sync or rebuild process at a time for a database.
+Only one sync or rebuild runs at a time for a database: see [Automation](#automation).
+
+## Automation
+
+Three options let another local program (an app, a scheduled job) run a sync safely.
+
+**`--env-file PATH`**, before the command, reads the settings from that file instead of
+`./.env`, so the command works from any directory:
+
+```sh
+athlete-ledger --env-file /absolute/path/to/ledger.env sync run --json
+```
+
+Environment variables still win over the file. Paths inside the file (such as
+`ATHLETE_LEDGER_DB_WALLET_DIR`) still resolve against the working directory, so automation should
+use absolute paths there. A missing file fails with `Env file not found: --env-file.` and exit 1.
+
+**`--json`** on `sync run`, `sync backfill`, `sync legs` and `sync status` prints no banner and
+no text lines: exactly one JSON object on stdout at the end. Diagnostics on stderr are unchanged.
+All keys are always present:
+
+```json
+{"command": "run", "ok": true,
+ "datasets": [{"dataset": "sleep", "ok": true, "chunks": 1, "requests": 1,
+               "raw_stored": 1, "raw_unchanged": 0, "rows_inserted": 0, "rows_updated": 3,
+               "rows_unchanged": 0, "placeholders_skipped": 0, "error": null}],
+ "legs": {"ok": true, "parents_checked": 0, "detail_requests": 0, "legs_inserted": 0,
+          "legs_updated": 0, "legs_unchanged": 0, "parents_failed": 0, "errors": []}}
+```
+
+`legs` is `null` when the legs step did not run (activities not selected); `sync legs` has
+`"datasets": []`. `sync status --json` prints `{"command": "status", "ok": true, "datasets":
+[{"dataset", "last_synced_date", "last_run_at", "last_status"}], "legs_stored"}`. A handled
+failure before or around the work (settings, database, provider setup, busy) prints
+`{"command", "ok": false, "error", "busy"}` with the same safe message as stderr. Messages never
+contain values, names, keys, tokens or payloads.
+
+**Lock.** `sync backfill`, `sync run`, `sync legs` and `sync rebuild` hold an exclusive lock for
+the configured database while they run. A second one started meanwhile stops before any provider
+or database work with `Another sync or rebuild is already running for this database.` and **exit
+code 75** (`busy: true` in JSON). The lock is an operating-system file lock on
+`$XDG_CACHE_HOME/athlete-ledger/sync-<hash>.lock` (default `~/.cache/athlete-ledger/`), named
+by a short hash of the database identity; the system releases it when the process ends, also
+after a crash. It protects one machine only. `status` and `coverage` take no lock.
+
+Exit codes: 0 success, 1 a handled failure or a failed dataset, 75 busy.
 
 ## How a download works
 

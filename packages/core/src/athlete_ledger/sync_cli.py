@@ -1,11 +1,13 @@
 """
 Author: L. Saetta
-Date Last Modified: 2026-11-17
+Date Last Modified: 2026-11-26
 License: MIT
-Description: Parse sync commands and display only safe counters and state.
+Description: Parse sync commands and display only safe counters and state, as text or
+    as one JSON object for automation.
 """  # noqa: D205, D212
 
 import argparse
+import json
 import logging
 import sys
 from datetime import date, timedelta
@@ -17,10 +19,11 @@ from athlete_ledger.console import info, ok
 from athlete_ledger.coverage import sync_coverage
 from athlete_ledger.errors import ConfigurationError
 from athlete_ledger.legs import LegsResult, stored_leg_count, sync_legs
+from athlete_ledger.locking import sync_lock
 from athlete_ledger.providers.garmin_connect import PersonalProvider
 from athlete_ledger.rebuild import REBUILD_DATASETS, rebuild
 from athlete_ledger.settings import DatabaseSettings, Settings
-from athlete_ledger.sync import sync_status, synchronize
+from athlete_ledger.sync import DatasetResult, sync_status, synchronize
 from athlete_ledger.sync_types import DATASETS
 
 
@@ -102,11 +105,51 @@ def add_sync_commands(commands: Any) -> None:
     )
     legs_parser = subcommands.add_parser("legs", help="Fetch missing multisport leg details")
     legs_parser.add_argument("--refresh", action="store_true")
-    subcommands.add_parser("status", help="Show progress without accessing the provider")
+    status = subcommands.add_parser("status", help="Show progress without accessing the provider")
+    for command in (backfill, incremental, legs_parser, status):
+        command.add_argument(
+            "--json", action="store_true", help="Print one JSON object instead of text lines"
+        )
+
+
+def wants_json(args: argparse.Namespace) -> bool:
+    """Tell whether the parsed command asked for JSON output.
+
+    Args:
+        args: Parsed command options.
+
+    Returns:
+        True for a sync command given --json.
+    """
+    return bool(getattr(args, "json", False))
+
+
+def emit_failure(args: argparse.Namespace, message: str, *, busy: bool = False) -> None:
+    """Report a handled failure on stderr and, with --json, as the JSON result.
+
+    Args:
+        args: Parsed command options.
+        message: Sanitized message; never values, keys or payloads.
+        busy: True when another sync holds the lock.
+    """
+    print(message, file=sys.stderr)
+    if wants_json(args):
+        print(
+            json.dumps(
+                {
+                    "command": getattr(args, "sync_command", None),
+                    "ok": False,
+                    "error": message,
+                    "busy": busy,
+                }
+            )
+        )
 
 
 def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSettings) -> int:
     """Run selected datasets and report counts, dates and safe errors only.
+
+    Network syncs and rebuilds hold the database's sync lock while they run.
 
     Args:
         args: Parsed command options.
@@ -115,26 +158,25 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSetting
 
     Returns:
         Zero only if every requested dataset completed.
+
+    Raises:
+        SyncBusyError: If another process holds the sync lock.
+        ConfigurationError: If a network sync gets settings without provider support.
     """
     if args.sync_command == "rebuild":
-        return _run_rebuild(engine, args.dataset or REBUILD_DATASETS)
+        with sync_lock(settings):
+            return _run_rebuild(engine, args.dataset or REBUILD_DATASETS)
     if args.sync_command == "coverage":
         _print_coverage(engine, args.dataset or DATASETS, date.today())
         return 0
     if args.sync_command == "status":
-        for state in sync_status(engine):
-            stamp = state.last_run_at.isoformat() if state.last_run_at else "-"
-            info(
-                f"{state.dataset}: last_synced_date={state.last_synced_date or '-'} "
-                f"last_run_at={stamp} last_status={state.last_status or '-'}"
-            )
-        info(f"legs: stored={stored_leg_count(engine)}")
+        _print_status(engine, wants_json(args))
         return 0
     today = date.today()
     since = args.since if args.sync_command == "backfill" else None
     until = (args.until or today) if args.sync_command == "backfill" else today
     if until > today or (since is not None and since > until):
-        print("Invalid sync date range; use ordered dates no later than today.", file=sys.stderr)
+        emit_failure(args, "Invalid sync date range; use ordered dates no later than today.")
         return 1
     # SDK warnings can contain credential-cache paths; the CLI uses its own safe diagnostics.
     logger = logging.getLogger("garmin_personal_api")
@@ -143,40 +185,161 @@ def run_sync(args: argparse.Namespace, engine: Engine, settings: DatabaseSetting
     logger.propagate = False
     if not isinstance(settings, Settings):
         raise ConfigurationError("Provider sync requires provider-enabled settings.")
-    provider = PersonalProvider(settings.personal_api_key)
-    failed = False
+    results: list[DatasetResult] = []
     legs_results: list[LegsResult] = []
-    try:
-        if args.sync_command == "legs":
-            return _print_legs(sync_legs(engine, provider, refresh=args.refresh))
-        results = synchronize(
-            engine,
-            provider,
-            args.dataset or DATASETS,
-            since=since,
-            until=until,
-            today=today,
-            after_activities=lambda: legs_results.append(sync_legs(engine, provider)),
-        )
-        for result in results:
-            c = result.counts
-            message = (
-                f"{result.dataset}: chunks={c.chunks} requests={c.requests} "
-                f"raw_stored={c.raw_stored} raw_unchanged={c.raw_unchanged} "
-                f"rows_inserted={c.inserted} rows_updated={c.updated} "
-                f"rows_unchanged={c.unchanged} placeholders_skipped={c.placeholders}"
-            )
-            if result.error:
-                failed = True
-                info(message)
-                print(result.error, file=sys.stderr)
+    with sync_lock(settings):
+        provider = PersonalProvider(settings.personal_api_key)
+        try:
+            if args.sync_command == "legs":
+                legs_results.append(sync_legs(engine, provider, refresh=args.refresh))
             else:
-                ok(message)
+                results = synchronize(
+                    engine,
+                    provider,
+                    args.dataset or DATASETS,
+                    since=since,
+                    until=until,
+                    today=today,
+                    after_activities=lambda: legs_results.append(sync_legs(engine, provider)),
+                )
+        finally:
+            provider.close()
+    failed = any(result.error for result in results) or any(
+        _legs_failed(legs_result) for legs_result in legs_results
+    )
+    if wants_json(args):
+        for result in results:
+            if result.error:
+                print(result.error, file=sys.stderr)
         for legs_result in legs_results:
-            failed = bool(_print_legs(legs_result)) or failed
-    finally:
-        provider.close()
+            for message in legs_result.errors:
+                print(message, file=sys.stderr)
+        print(json.dumps(_sync_json(args.sync_command, results, legs_results, not failed)))
+    else:
+        for result in results:
+            _print_result(result)
+        for legs_result in legs_results:
+            _print_legs(legs_result)
     return 1 if failed else 0
+
+
+def _print_result(result: DatasetResult) -> None:
+    """Print the counters of one dataset, and its safe error on stderr.
+
+    Args:
+        result: Committed work and error of one dataset.
+    """
+    c = result.counts
+    message = (
+        f"{result.dataset}: chunks={c.chunks} requests={c.requests} "
+        f"raw_stored={c.raw_stored} raw_unchanged={c.raw_unchanged} "
+        f"rows_inserted={c.inserted} rows_updated={c.updated} "
+        f"rows_unchanged={c.unchanged} placeholders_skipped={c.placeholders}"
+    )
+    if result.error:
+        info(message)
+        print(result.error, file=sys.stderr)
+    else:
+        ok(message)
+
+
+def _legs_failed(result: LegsResult) -> bool:
+    """Tell whether the legs step failed for any parent or as a whole.
+
+    Args:
+        result: Per-parent committed work counters.
+
+    Returns:
+        True when a parent failed or the step reported an error.
+    """
+    return bool(result.parents_failed or result.errors)
+
+
+def _sync_json(
+    command: str, results: list[DatasetResult], legs_results: list[LegsResult], success: bool
+) -> dict[str, Any]:
+    """Build the JSON result of a network sync, with counters and safe errors only.
+
+    Args:
+        command: The sync command name, such as run.
+        results: Per-dataset results in run order.
+        legs_results: The legs step result, when it ran.
+        success: True when every dataset and the legs step completed.
+
+    Returns:
+        A JSON-serializable mapping with the shape documented in docs/sync.md.
+    """
+    datasets = [
+        {
+            "dataset": result.dataset,
+            "ok": not result.error,
+            "chunks": result.counts.chunks,
+            "requests": result.counts.requests,
+            "raw_stored": result.counts.raw_stored,
+            "raw_unchanged": result.counts.raw_unchanged,
+            "rows_inserted": result.counts.inserted,
+            "rows_updated": result.counts.updated,
+            "rows_unchanged": result.counts.unchanged,
+            "placeholders_skipped": result.counts.placeholders,
+            "error": result.error or None,
+        }
+        for result in results
+    ]
+    legs = None
+    if legs_results:
+        step = legs_results[0]
+        legs = {
+            "ok": not _legs_failed(step),
+            "parents_checked": step.parents_checked,
+            "detail_requests": step.requests,
+            "legs_inserted": step.counts.inserted,
+            "legs_updated": step.counts.updated,
+            "legs_unchanged": step.counts.unchanged,
+            "parents_failed": step.parents_failed,
+            "errors": list(step.errors),
+        }
+    return {"command": command, "ok": success, "datasets": datasets, "legs": legs}
+
+
+def _print_status(engine: Engine, as_json: bool) -> None:
+    """Print per-dataset progress and the stored leg count, as text or JSON.
+
+    Args:
+        engine: Ledger database engine, read only.
+        as_json: True to print one JSON object.
+    """
+    states = sync_status(engine)
+    legs_stored = stored_leg_count(engine)
+    if as_json:
+        datasets = [
+            {
+                "dataset": state.dataset,
+                "last_synced_date": (
+                    state.last_synced_date.isoformat() if state.last_synced_date else None
+                ),
+                "last_run_at": state.last_run_at.isoformat() if state.last_run_at else None,
+                "last_status": state.last_status,
+            }
+            for state in states
+        ]
+        print(
+            json.dumps(
+                {
+                    "command": "status",
+                    "ok": True,
+                    "datasets": datasets,
+                    "legs_stored": legs_stored,
+                }
+            )
+        )
+        return
+    for state in states:
+        stamp = state.last_run_at.isoformat() if state.last_run_at else "-"
+        info(
+            f"{state.dataset}: last_synced_date={state.last_synced_date or '-'} "
+            f"last_run_at={stamp} last_status={state.last_status or '-'}"
+        )
+    info(f"legs: stored={legs_stored}")
 
 
 def _print_legs(result: LegsResult) -> int:
